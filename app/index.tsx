@@ -1,6 +1,9 @@
+import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 export default function Index() {
+  const router = useRouter();
+
   return (
     <View style={styles.screen}>
       <Text style={styles.welcomeText}>Welcome to</Text>
@@ -11,7 +14,7 @@ export default function Index() {
 
       <Pressable
         accessibilityRole="button"
-        onPress={() => {}}
+        onPress={() => router.push("/add-place")}
         style={styles.primaryButton}
       >
         <Text style={styles.primaryButtonText}>Add a Place</Text>
@@ -19,7 +22,7 @@ export default function Index() {
 
       <Pressable
         accessibilityRole="button"
-        onPress={() => {}}
+        onPress={() => router.push("/saved-places")}
         style={styles.secondaryButton}
       >
         <Text style={styles.secondaryButtonText}>View Saved Places</Text>
