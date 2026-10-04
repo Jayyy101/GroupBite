@@ -1,39 +1,103 @@
-import { savePlace } from "@/utils/storage";
-import { useRouter } from "expo-router";
-import { useState } from "react";
+import { getSavedPlaces, savePlace, updatePlace } from "@/utils/storage";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 export default function AddPlaceScreen() {
     const router = useRouter();
+    const { id } = useLocalSearchParams<{ id?: string | string[] }>();
+    const isEditing = id !== undefined;
     const [name, setName] = useState("");
     const [cuisine, setCuisine] = useState("");
     const [notes, setNotes] = useState("");
     const [rating, setRating] = useState<number | undefined>();
     const [wouldGoAgain, setWouldGoAgain] = useState<boolean | undefined>();
     const [error, setError] = useState("");
+    const [loading, setLoading] = useState(isEditing);
+    const [loadError, setLoadError] = useState("");
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        let active = true;
+
+        async function loadPlace() {
+            if (!isEditing) {
+                return;
+            }
+
+            setLoading(true);
+            setLoadError("");
+            if (typeof id !== "string" || id.trim() === "") {
+                setLoadError("This place could not be found.");
+                setLoading(false);
+                return;
+            }
+
+            try {
+                const places = await getSavedPlaces();
+                const place = places.find((item) => item.id === id);
+                if (!active) return;
+
+                if (!place) {
+                    setLoadError("This place could not be found.");
+                    return;
+                }
+
+                setName(place.name);
+                setCuisine(place.cuisine ?? "");
+                setNotes(place.notes ?? "");
+                setRating(place.rating);
+                setWouldGoAgain(place.wouldGoAgain);
+            } catch (error) {
+                console.error("Failed to load place for editing:", error);
+                if (active) setLoadError("Could not load this place. Please try again.");
+            } finally {
+                if (active) setLoading(false);
+            }
+        }
+
+        loadPlace();
+        return () => {
+            active = false;
+        };
+    }, [id, isEditing]);
 
     async function handleSave() {
+        if (loading || loadError !== "" || saving) return;
+
         if (name.trim() === "") {
             setError("Please enter a place name.");
             return;
         }
 
         setError("");
+        setSaving(true);
         try {
-            await savePlace({
-                id: Date.now().toString(),
+            const place = {
+                id: typeof id === "string" ? id : Date.now().toString(),
                 name: name.trim(),
                 cuisine: cuisine.trim(),
                 notes: notes.trim(),
                 rating,
                 wouldGoAgain,
-            });
+            };
+            if (isEditing) {
+                await updatePlace(place);
+            } else {
+                await savePlace(place);
+            }
         } catch (error) {
             console.error("Failed to save place:", error);
             setError("Could not save the place. Please try again.");
             return;
+        } finally {
+            setSaving(false);
         }
 
-        router.replace("/saved-places");
+        if (isEditing && typeof id === "string") {
+            router.dismissTo({ pathname: "/place/[id]", params: { id } });
+        } else {
+            router.replace("/saved-places");
+        }
     }
 
     return (
@@ -44,84 +108,102 @@ export default function AddPlaceScreen() {
         >
             <Pressable
                 accessibilityRole="button"
-                onPress={() => router.back()}
+                disabled={saving}
+                onPress={() => {
+                    if (router.canGoBack()) {
+                        router.back();
+                    } else {
+                        router.replace("/saved-places");
+                    }
+                }}
                 style={styles.backButton}
             >
                 <Text style={styles.backButtonText}>Back</Text>
             </Pressable>
 
-            <Text style={styles.title}>Add a Place</Text>
+            <Text style={styles.title}>{isEditing ? "Edit Place" : "Add a Place"}</Text>
 
-            <TextInput
-                value={name}
-                onChangeText={setName}
-                placeholder="Enter a name"
-                placeholderTextColor="#79665E"
-                style={styles.input}
-            />
+            {loading ? (
+                <Text style={styles.choiceHint}>Loading place...</Text>
+            ) : loadError !== "" ? (
+                <Text style={styles.error}>{loadError}</Text>
+            ) : (
+                <View>
+                    <TextInput
+                        value={name}
+                        onChangeText={setName}
+                        placeholder="Enter a name"
+                        placeholderTextColor="#79665E"
+                        style={styles.input}
+                    />
 
-            <TextInput
-                value={cuisine}
-                onChangeText={setCuisine}
-                placeholder="Cuisine (optional)"
-                placeholderTextColor="#79665E"
-                style={[styles.input, styles.optionalInput]}
-            />
+                    <TextInput
+                        value={cuisine}
+                        onChangeText={setCuisine}
+                        placeholder="Cuisine (optional)"
+                        placeholderTextColor="#79665E"
+                        style={[styles.input, styles.optionalInput]}
+                    />
 
-            <TextInput
-                value={notes}
-                onChangeText={setNotes}
-                placeholder="Notes (optional)"
-                placeholderTextColor="#79665E"
-                multiline
-                style={[styles.input, styles.optionalInput, styles.notesInput]}
-            />
+                    <TextInput
+                        value={notes}
+                        onChangeText={setNotes}
+                        placeholder="Notes (optional)"
+                        placeholderTextColor="#79665E"
+                        multiline
+                        style={[styles.input, styles.optionalInput, styles.notesInput]}
+                    />
 
-            <Text style={styles.choiceLabel}>Rating (optional, 1–5)</Text>
-            <View style={styles.choiceRow}>
-                {[1, 2, 3, 4, 5].map((value) => (
+                    <Text style={styles.choiceLabel}>Rating (optional, 1–5)</Text>
+                    <View style={styles.choiceRow}>
+                        {[1, 2, 3, 4, 5].map((value) => (
+                            <Pressable
+                                key={value}
+                                accessibilityRole="button"
+                                accessibilityLabel={`Rating ${value} out of 5`}
+                                accessibilityState={{ selected: rating === value }}
+                                onPress={() => setRating(rating === value ? undefined : value)}
+                                style={[styles.choiceButton, rating === value && styles.selectedChoice]}
+                            >
+                                <Text style={[styles.choiceText, rating === value && styles.selectedChoiceText]}>
+                                    {value}
+                                </Text>
+                            </Pressable>
+                        ))}
+                    </View>
+
+                    <Text style={styles.choiceLabel}>Would you go again? (optional)</Text>
+                    <View style={styles.choiceRow}>
+                        {[true, false].map((value) => (
+                            <Pressable
+                                key={String(value)}
+                                accessibilityRole="button"
+                                accessibilityState={{ selected: wouldGoAgain === value }}
+                                onPress={() => setWouldGoAgain(wouldGoAgain === value ? undefined : value)}
+                                style={[styles.choiceButton, wouldGoAgain === value && styles.selectedChoice]}
+                            >
+                                <Text style={[styles.choiceText, wouldGoAgain === value && styles.selectedChoiceText]}>
+                                    {value ? "Yes" : "No"}
+                                </Text>
+                            </Pressable>
+                        ))}
+                    </View>
+                    <Text style={styles.choiceHint}>Tap a selected choice again to clear it.</Text>
+
+                    {error !== "" && <Text style={styles.error}>{error}</Text>}
+
                     <Pressable
-                        key={value}
                         accessibilityRole="button"
-                        accessibilityLabel={`Rating ${value} out of 5`}
-                        accessibilityState={{ selected: rating === value }}
-                        onPress={() => setRating(rating === value ? undefined : value)}
-                        style={[styles.choiceButton, rating === value && styles.selectedChoice]}
+                        onPress={handleSave}
+                        disabled={saving}
+                        style={styles.saveButton}
                     >
-                        <Text style={[styles.choiceText, rating === value && styles.selectedChoiceText]}>
-                            {value}
+                        <Text style={styles.saveButtonText}>
+                            {saving ? "Saving..." : isEditing ? "Save Changes" : "Save Place"}
                         </Text>
                     </Pressable>
-                ))}
-            </View>
-
-            <Text style={styles.choiceLabel}>Would you go again? (optional)</Text>
-            <View style={styles.choiceRow}>
-                {[true, false].map((value) => (
-                    <Pressable
-                        key={String(value)}
-                        accessibilityRole="button"
-                        accessibilityState={{ selected: wouldGoAgain === value }}
-                        onPress={() => setWouldGoAgain(wouldGoAgain === value ? undefined : value)}
-                        style={[styles.choiceButton, wouldGoAgain === value && styles.selectedChoice]}
-                    >
-                        <Text style={[styles.choiceText, wouldGoAgain === value && styles.selectedChoiceText]}>
-                            {value ? "Yes" : "No"}
-                        </Text>
-                    </Pressable>
-                ))}
-            </View>
-            <Text style={styles.choiceHint}>Tap a selected choice again to clear it.</Text>
-
-            {error !== "" && <Text style={styles.error}>{error}</Text>}
-
-            <Pressable
-                accessibilityRole="button"
-                onPress={handleSave}
-                style={styles.saveButton}
-            >
-                <Text style={styles.saveButtonText}>Save Place</Text>
-            </Pressable>
+                </View>
+            )}
         </ScrollView>
     );
 }

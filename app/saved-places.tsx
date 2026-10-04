@@ -1,5 +1,5 @@
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Place } from "../types/place";
 import { getSavedPlaces } from "../utils/storage";
@@ -7,15 +7,28 @@ import { getSavedPlaces } from "../utils/storage";
 export default function SavedPlacesScreen() {
     const router = useRouter();
     const [places, setPlaces] = useState<Place[]>([]);
+    const [error, setError] = useState("");
 
-    useEffect(() => {
+    useFocusEffect(useCallback(() => {
+        let active = true;
         async function loadPlaces() {
-            const savedPlaces = await getSavedPlaces();
-            setPlaces(savedPlaces);
+            try {
+                const savedPlaces = await getSavedPlaces();
+                if (active) {
+                    setPlaces(savedPlaces);
+                    setError("");
+                }
+            } catch (error) {
+                console.error("Failed to load saved places:", error);
+                if (active) setError("Could not load saved places. Please try again.");
+            }
         }
 
         loadPlaces();
-    }, []);
+        return () => {
+            active = false;
+        };
+    }, []));
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -29,7 +42,9 @@ export default function SavedPlacesScreen() {
 
             <Text style={styles.title}>Saved Places</Text>
 
-            {places.length === 0 && (
+            {error !== "" && <Text style={styles.error}>{error}</Text>}
+
+            {error === "" && places.length === 0 && (
                 <View style={styles.card}>
                     <Text style={styles.emptyMessage}>
                         No saved places yet. Add a place to start your list!
@@ -97,6 +112,11 @@ const styles = StyleSheet.create({
         color: "#2D1F1A",
         fontSize: 17,
         fontWeight: "600",
+    },
+    error: {
+        color: "#B42318",
+        fontSize: 16,
+        marginBottom: 16,
     },
     emptyMessage: {
         color: "#79665E",

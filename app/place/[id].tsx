@@ -1,8 +1,8 @@
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
+import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Place } from "../../types/place";
-import { getSavedPlaces } from "../../utils/storage";
+import { deletePlace, getSavedPlaces } from "../../utils/storage";
 
 export default function PlaceDetailScreen() {
     const router = useRouter();
@@ -10,9 +10,14 @@ export default function PlaceDetailScreen() {
     const [place, setPlace] = useState<Place | undefined>();
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [confirmingDelete, setConfirmingDelete] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [deleteError, setDeleteError] = useState("");
 
-    useEffect(() => {
+    useFocusEffect(useCallback(() => {
         let active = true;
+        setConfirmingDelete(false);
+        setDeleteError("");
 
         async function loadPlace() {
             setLoading(true);
@@ -52,12 +57,31 @@ export default function PlaceDetailScreen() {
         return () => {
             active = false;
         };
-    }, [id]);
+    }, [id]));
+
+    async function handleDelete() {
+        if (!place || !confirmingDelete || deleting) return;
+
+        setDeleting(true);
+        setDeleteError("");
+        try {
+            await deletePlace(place.id);
+        } catch (error) {
+            console.error("Failed to delete place:", error);
+            setDeleteError("Could not delete this place. Please try again.");
+            return;
+        } finally {
+            setDeleting(false);
+        }
+
+        router.dismissTo("/saved-places");
+    }
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
             <Pressable
                 accessibilityRole="button"
+                disabled={deleting}
                 onPress={() => {
                     if (router.canGoBack()) {
                         router.back();
@@ -104,6 +128,60 @@ export default function PlaceDetailScreen() {
                             <Text style={styles.message}>
                                 Would go again: {place.wouldGoAgain ? "Yes" : "No"}
                             </Text>
+                        </View>
+                    )}
+
+                    {place && (
+                        <View>
+                            <Pressable
+                                accessibilityRole="button"
+                                disabled={deleting}
+                                onPress={() => router.push({
+                                    pathname: "/add-place",
+                                    params: { id: place.id },
+                                })}
+                                style={styles.editButton}
+                            >
+                                <Text style={styles.editButtonText}>Edit Place</Text>
+                            </Pressable>
+
+                            {confirmingDelete ? (
+                                <View>
+                                    <Text style={styles.message}>
+                                        Delete this place? This cannot be undone.
+                                    </Text>
+                                    <Pressable
+                                        accessibilityRole="button"
+                                        disabled={deleting}
+                                        onPress={() => {
+                                            setConfirmingDelete(false);
+                                            setDeleteError("");
+                                        }}
+                                        style={styles.cancelButton}
+                                    >
+                                        <Text style={styles.backButtonText}>Cancel</Text>
+                                    </Pressable>
+                                    <Pressable
+                                        accessibilityRole="button"
+                                        disabled={deleting}
+                                        onPress={handleDelete}
+                                        style={styles.deleteButton}
+                                    >
+                                        <Text style={styles.deleteButtonText}>
+                                            {deleting ? "Deleting..." : "Confirm Delete"}
+                                        </Text>
+                                    </Pressable>
+                                </View>
+                            ) : (
+                                <Pressable
+                                    accessibilityRole="button"
+                                    onPress={() => setConfirmingDelete(true)}
+                                    style={styles.deleteButton}
+                                >
+                                    <Text style={styles.deleteButtonText}>Delete Place</Text>
+                                </Pressable>
+                            )}
+                            {deleteError !== "" && <Text style={styles.error}>{deleteError}</Text>}
                         </View>
                     )}
                 </View>
@@ -156,6 +234,44 @@ const styles = StyleSheet.create({
         color: "#79665E",
         fontSize: 16,
         lineHeight: 24,
+    },
+    editButton: {
+        backgroundColor: "#E85D3F",
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: 56,
+        borderRadius: 14,
+        marginBottom: 16,
+    },
+    editButtonText: {
+        color: "#FFFFFF",
+        fontSize: 17,
+        fontWeight: "600",
+    },
+    cancelButton: {
+        alignItems: "center",
+        justifyContent: "center",
+        minHeight: 48,
+        borderWidth: 1,
+        borderColor: "#E85D3F",
+        borderRadius: 12,
+        marginTop: 16,
+        marginBottom: 12,
+    },
+    deleteButton: {
+        backgroundColor: "#FFF1F0",
+        borderWidth: 1,
+        borderColor: "#B42318",
+        borderRadius: 14,
+        minHeight: 56,
+        alignItems: "center",
+        justifyContent: "center",
+        marginBottom: 16,
+    },
+    deleteButtonText: {
+        color: "#B42318",
+        fontSize: 17,
+        fontWeight: "600",
     },
     error: {
         color: "#B42318",
