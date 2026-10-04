@@ -1,6 +1,6 @@
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Place } from "../types/place";
 import { getSavedPlaces } from "../utils/storage";
 
@@ -18,7 +18,7 @@ export default function SavedPlacesScreen() {
     }, []);
 
     return (
-        <View style={styles.screen}>
+        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
             <Pressable
                 accessibilityRole="button"
                 onPress={() => router.back()}
@@ -50,7 +50,7 @@ export default function SavedPlacesScreen() {
                     <Text style={styles.placeName}>{place.name}</Text>
                 </Pressable>
             ))}
-        </View>
+        </ScrollView>
     );
 }
 
@@ -58,8 +58,11 @@ const styles = StyleSheet.create({
     screen: {
         flex: 1,
         backgroundColor: "#FFF8F0",
+    },
+    content: {
         paddingTop: 60,
         paddingHorizontal: 24,
+        paddingBottom: 32,
     },
     backButton: {
         alignSelf: "flex-start",

@@ -3,4 +3,6 @@ export type Place = {
     name: string;
     cuisine?: string;
     notes?: string;
+    rating?: number;
+    wouldGoAgain?: boolean;
 };

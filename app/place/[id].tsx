@@ -1,6 +1,6 @@
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import type { Place } from "../../types/place";
 import { getSavedPlaces } from "../../utils/storage";
 
@@ -55,7 +55,7 @@ export default function PlaceDetailScreen() {
     }, [id]);
 
     return (
-        <View style={styles.screen}>
+        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
             <Pressable
                 accessibilityRole="button"
                 onPress={() => {
@@ -91,9 +91,24 @@ export default function PlaceDetailScreen() {
                             <Text style={styles.message}>{place.notes}</Text>
                         </View>
                     )}
+
+                    {place?.rating !== undefined && (
+                        <View style={styles.detailSection}>
+                            <Text style={styles.label}>Rating</Text>
+                            <Text style={styles.message}>{place.rating} / 5</Text>
+                        </View>
+                    )}
+
+                    {typeof place?.wouldGoAgain === "boolean" && (
+                        <View style={styles.detailSection}>
+                            <Text style={styles.message}>
+                                Would go again: {place.wouldGoAgain ? "Yes" : "No"}
+                            </Text>
+                        </View>
+                    )}
                 </View>
             )}
-        </View>
+        </ScrollView>
     );
 }
 
@@ -101,8 +116,11 @@ const styles = StyleSheet.create({
     screen: {
         flex: 1,
         backgroundColor: "#FFF8F0",
+    },
+    content: {
         paddingTop: 60,
         paddingHorizontal: 24,
+        paddingBottom: 32,
     },
     backButton: {
         alignSelf: "flex-start",

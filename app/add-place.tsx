@@ -1,12 +1,14 @@
 import { savePlace } from "@/utils/storage";
 import { useRouter } from "expo-router";
 import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 export default function AddPlaceScreen() {
     const router = useRouter();
     const [name, setName] = useState("");
     const [cuisine, setCuisine] = useState("");
     const [notes, setNotes] = useState("");
+    const [rating, setRating] = useState<number | undefined>();
+    const [wouldGoAgain, setWouldGoAgain] = useState<boolean | undefined>();
     const [error, setError] = useState("");
 
     async function handleSave() {
@@ -22,6 +24,8 @@ export default function AddPlaceScreen() {
                 name: name.trim(),
                 cuisine: cuisine.trim(),
                 notes: notes.trim(),
+                rating,
+                wouldGoAgain,
             });
         } catch (error) {
             console.error("Failed to save place:", error);
@@ -33,7 +37,11 @@ export default function AddPlaceScreen() {
     }
 
     return (
-        <View style={styles.screen}>
+        <ScrollView
+            style={styles.screen}
+            contentContainerStyle={styles.content}
+            keyboardShouldPersistTaps="handled"
+        >
             <Pressable
                 accessibilityRole="button"
                 onPress={() => router.back()}
@@ -69,6 +77,42 @@ export default function AddPlaceScreen() {
                 style={[styles.input, styles.optionalInput, styles.notesInput]}
             />
 
+            <Text style={styles.choiceLabel}>Rating (optional, 1–5)</Text>
+            <View style={styles.choiceRow}>
+                {[1, 2, 3, 4, 5].map((value) => (
+                    <Pressable
+                        key={value}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Rating ${value} out of 5`}
+                        accessibilityState={{ selected: rating === value }}
+                        onPress={() => setRating(rating === value ? undefined : value)}
+                        style={[styles.choiceButton, rating === value && styles.selectedChoice]}
+                    >
+                        <Text style={[styles.choiceText, rating === value && styles.selectedChoiceText]}>
+                            {value}
+                        </Text>
+                    </Pressable>
+                ))}
+            </View>
+
+            <Text style={styles.choiceLabel}>Would you go again? (optional)</Text>
+            <View style={styles.choiceRow}>
+                {[true, false].map((value) => (
+                    <Pressable
+                        key={String(value)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: wouldGoAgain === value }}
+                        onPress={() => setWouldGoAgain(wouldGoAgain === value ? undefined : value)}
+                        style={[styles.choiceButton, wouldGoAgain === value && styles.selectedChoice]}
+                    >
+                        <Text style={[styles.choiceText, wouldGoAgain === value && styles.selectedChoiceText]}>
+                            {value ? "Yes" : "No"}
+                        </Text>
+                    </Pressable>
+                ))}
+            </View>
+            <Text style={styles.choiceHint}>Tap a selected choice again to clear it.</Text>
+
             {error !== "" && <Text style={styles.error}>{error}</Text>}
 
             <Pressable
@@ -78,7 +122,7 @@ export default function AddPlaceScreen() {
             >
                 <Text style={styles.saveButtonText}>Save Place</Text>
             </Pressable>
-        </View>
+        </ScrollView>
     );
 }
 
@@ -86,8 +130,11 @@ const styles = StyleSheet.create({
     screen: {
         flex: 1,
         backgroundColor: "#FFF8F0",
+    },
+    content: {
         paddingTop: 60,
         paddingHorizontal: 24,
+        paddingBottom: 32,
     },
     backButton: {
         alignSelf: "flex-start",
@@ -126,6 +173,46 @@ const styles = StyleSheet.create({
     notesInput: {
         minHeight: 112,
         textAlignVertical: "top",
+    },
+    choiceLabel: {
+        color: "#2D1F1A",
+        fontSize: 17,
+        fontWeight: "600",
+        marginTop: 20,
+        marginBottom: 12,
+    },
+    choiceRow: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: 8,
+    },
+    choiceButton: {
+        minWidth: 48,
+        minHeight: 48,
+        alignItems: "center",
+        justifyContent: "center",
+        paddingHorizontal: 16,
+        backgroundColor: "#FFFFFF",
+        borderWidth: 1,
+        borderColor: "#BFA99B",
+        borderRadius: 12,
+    },
+    selectedChoice: {
+        backgroundColor: "#E85D3F",
+        borderColor: "#E85D3F",
+    },
+    choiceText: {
+        color: "#2D1F1A",
+        fontSize: 17,
+        fontWeight: "600",
+    },
+    selectedChoiceText: {
+        color: "#FFFFFF",
+    },
+    choiceHint: {
+        color: "#79665E",
+        fontSize: 14,
+        marginTop: 12,
     },
     error: {
         color: "#B42318",
