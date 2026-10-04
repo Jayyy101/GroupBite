@@ -1,11 +1,11 @@
 import { useRouter } from "expo-router";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function Index() {
   const router = useRouter();
 
   return (
-    <View style={styles.screen}>
+    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Text style={styles.welcomeText}>Welcome to</Text>
       <Text style={styles.title}>GroupBite</Text>
       <Text style={styles.description}>
@@ -34,7 +34,15 @@ export default function Index() {
           Your favorite restaurants will appear here after you add them.
         </Text>
       </View>
-    </View>
+
+      <Pressable
+        accessibilityRole="button"
+        onPress={() => router.push("/groups")}
+        style={styles.secondaryButton}
+      >
+        <Text style={styles.secondaryButtonText}>Groups</Text>
+      </Pressable>
+    </ScrollView>
   );
 }
 
@@ -42,8 +50,11 @@ const styles = StyleSheet.create({
   screen: {
     flex: 1,
     backgroundColor: "#FFF8F0",
+  },
+  content: {
     paddingHorizontal: 24,
     paddingTop: 80,
+    paddingBottom: 32,
   },
   welcomeText: {
     color: "#7A5C4F",
