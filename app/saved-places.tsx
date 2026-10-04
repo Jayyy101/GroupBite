@@ -38,9 +38,17 @@ export default function SavedPlacesScreen() {
             )}
 
             {places.map((place) => (
-                <View key={place.id} style={styles.card}>
+                <Pressable
+                    key={place.id}
+                    accessibilityRole="button"
+                    onPress={() => router.push({
+                        pathname: "/place/[id]",
+                        params: { id: place.id },
+                    })}
+                    style={styles.card}
+                >
                     <Text style={styles.placeName}>{place.name}</Text>
-                </View>
+                </Pressable>
             ))}
         </View>
     );
