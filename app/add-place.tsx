@@ -5,6 +5,8 @@ import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 export default function AddPlaceScreen() {
     const router = useRouter();
     const [name, setName] = useState("");
+    const [cuisine, setCuisine] = useState("");
+    const [notes, setNotes] = useState("");
     const [error, setError] = useState("");
 
     async function handleSave() {
@@ -18,6 +20,8 @@ export default function AddPlaceScreen() {
             await savePlace({
                 id: Date.now().toString(),
                 name: name.trim(),
+                cuisine: cuisine.trim(),
+                notes: notes.trim(),
             });
         } catch (error) {
             console.error("Failed to save place:", error);
@@ -46,6 +50,23 @@ export default function AddPlaceScreen() {
                 placeholder="Enter a name"
                 placeholderTextColor="#79665E"
                 style={styles.input}
+            />
+
+            <TextInput
+                value={cuisine}
+                onChangeText={setCuisine}
+                placeholder="Cuisine (optional)"
+                placeholderTextColor="#79665E"
+                style={[styles.input, styles.optionalInput]}
+            />
+
+            <TextInput
+                value={notes}
+                onChangeText={setNotes}
+                placeholder="Notes (optional)"
+                placeholderTextColor="#79665E"
+                multiline
+                style={[styles.input, styles.optionalInput, styles.notesInput]}
             />
 
             {error !== "" && <Text style={styles.error}>{error}</Text>}
@@ -98,6 +119,13 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 14,
         fontSize: 17,
+    },
+    optionalInput: {
+        marginTop: 16,
+    },
+    notesInput: {
+        minHeight: 112,
+        textAlignVertical: "top",
     },
     error: {
         color: "#B42318",

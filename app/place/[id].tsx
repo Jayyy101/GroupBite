@@ -75,7 +75,23 @@ export default function PlaceDetailScreen() {
             ) : error !== "" ? (
                 <Text style={styles.error}>{error}</Text>
             ) : (
-                <Text style={styles.title}>{place?.name}</Text>
+                <View>
+                    <Text style={styles.title}>{place?.name}</Text>
+
+                    {!!place?.cuisine?.trim() && (
+                        <View style={styles.detailSection}>
+                            <Text style={styles.label}>Cuisine</Text>
+                            <Text style={styles.message}>{place.cuisine}</Text>
+                        </View>
+                    )}
+
+                    {!!place?.notes?.trim() && (
+                        <View style={styles.detailSection}>
+                            <Text style={styles.label}>Notes</Text>
+                            <Text style={styles.message}>{place.notes}</Text>
+                        </View>
+                    )}
+                </View>
             )}
         </View>
     );
@@ -108,6 +124,15 @@ const styles = StyleSheet.create({
         fontSize: 30,
         fontWeight: "700",
         marginBottom: 24,
+    },
+    detailSection: {
+        marginBottom: 20,
+    },
+    label: {
+        color: "#2D1F1A",
+        fontSize: 17,
+        fontWeight: "600",
+        marginBottom: 8,
     },
     message: {
         color: "#79665E",
