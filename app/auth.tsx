@@ -92,6 +92,7 @@ export default function AuthScreen() {
                     )}
                     <Text style={styles.label}>Email</Text>
                     <TextInput
+                        key={Platform.OS === "ios" ? (signingUp ? "signup-email" : "signin-email") : undefined}
                         accessibilityLabel="Email"
                         style={styles.input}
                         placeholder="you@example.com"
@@ -99,13 +100,14 @@ export default function AuthScreen() {
                         keyboardType="email-address"
                         autoCapitalize="none"
                         autoCorrect={false}
-                        textContentType={Platform.OS === "ios" ? "username" : undefined}
+                        textContentType={Platform.OS === "ios" ? "none" : undefined}
                         autoComplete={Platform.OS === "ios" ? undefined : "username"}
                         value={email}
                         onChangeText={setEmail}
                         editable={!busy}
                     />
                     <Text style={styles.label}>Password</Text>
+                    {/* iOS workaround: bypass Password AutoFill while keeping the input secure. */}
                     <TextInput
                         key={signingUp ? "signup-password" : "signin-password"}
                         accessibilityLabel="Password"
@@ -113,7 +115,7 @@ export default function AuthScreen() {
                         secureTextEntry
                         autoCapitalize="none"
                         autoCorrect={false}
-                        textContentType={Platform.OS === "ios" ? (signingUp ? "newPassword" : "password") : undefined}
+                        textContentType={Platform.OS === "ios" ? "oneTimeCode" : undefined}
                         autoComplete={Platform.OS === "ios" ? undefined : (signingUp ? "new-password" : "current-password")}
                         value={password}
                         onChangeText={setPassword}

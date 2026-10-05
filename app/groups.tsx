@@ -1,10 +1,12 @@
 import { authErrorMessage } from "@/lib/auth-errors";
+import { groupErrorMessage } from "@/lib/group-errors";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
-import type { Group } from "@/types/database";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useState } from "react";
+import type { Group, JoinRequest } from "@/types/database";
+import { useRouter } from "expo-router";
+import { useIsFocused } from "@react-navigation/native";
+import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function GroupsScreen() {
@@ -43,22 +45,36 @@ function SignedInGroups({ userId }: { userId: string }) {
     const [signingOut, setSigningOut] = useState(false);
     const [error, setError] = useState("");
     const [loadError, setLoadError] = useState("");
+    const [inviteCode, setInviteCode] = useState("");
+    const [requesting, setRequesting] = useState(false);
+    const [requestMessage, setRequestMessage] = useState("");
+    const [requests, setRequests] = useState<Pick<JoinRequest, "id" | "status" | "requested_at">[]>([]);
+    const [refreshVersion, setRefreshVersion] = useState(0);
+    const busy = creating || requesting || signingOut;
+    const isFocused = useIsFocused();
 
-    useFocusEffect(useCallback(() => {
+    useEffect(() => {
+        if (!isFocused) return;
         let active = true;
         async function loadGroups() {
             setLoading(true);
             setLoadError("");
             try {
-                const [groupsResult, profileResult] = await Promise.all([
+                const [groupsResult, profileResult, requestsResult] = await Promise.all([
                     supabase.from("groups").select("*").order("created_at", { ascending: false }),
                     supabase.from("profiles").select("display_name").eq("id", userId).single(),
+                    supabase.from("join_requests").select("id,group_id,status,requested_at").eq("user_id", userId).order("requested_at", { ascending: false }),
                 ]);
                 if (groupsResult.error) throw groupsResult.error;
                 if (profileResult.error) throw profileResult.error;
+                if (requestsResult.error) throw requestsResult.error;
                 if (active) {
                     setGroups(groupsResult.data);
                     setDisplayName(profileResult.data.display_name);
+                    // The group card replaces an approved request once membership is visible.
+                    setRequests(requestsResult.data.filter(request =>
+                        request.status !== "approved" || !groupsResult.data.some(group => group.id === request.group_id)
+                    ));
                 }
             } catch {
                 if (active) setLoadError("Could not load your groups. Check your connection and return to this screen to try again.");
@@ -68,10 +84,10 @@ function SignedInGroups({ userId }: { userId: string }) {
         }
         loadGroups();
         return () => { active = false; };
-    }, [userId]));
+    }, [userId, isFocused, refreshVersion]);
 
     async function handleCreate() {
-        if (creating || signingOut || loading) return;
+        if (busy || loading) return;
         setError("");
         if (name.trim() === "") {
             setError("Please enter a group name.");
@@ -81,15 +97,8 @@ function SignedInGroups({ userId }: { userId: string }) {
         try {
             const { error } = await supabase.rpc("create_group", { group_name: name.trim() });
             if (error) throw error;
-            // Read the committed group through RLS rather than trusting an RPC payload.
-            const result = await supabase.from("groups").select("*").order("created_at", { ascending: false });
-            if (result.error) {
-                setLoadError("Your group was created. Return to this screen to reload the list.");
-            } else {
-                setGroups(result.data);
-                setLoadError("");
-            }
             setName("");
+            setRefreshVersion(value => value + 1);
         } catch {
             setError("Could not create the group. Check your connection and try again.");
         } finally {
@@ -97,8 +106,30 @@ function SignedInGroups({ userId }: { userId: string }) {
         }
     }
 
+    async function handleRequest() {
+        if (busy || loading) return;
+        setError("");
+        setRequestMessage("");
+        if (inviteCode.trim() === "") {
+            setError("Please enter an invite code.");
+            return;
+        }
+        setRequesting(true);
+        try {
+            const { error } = await supabase.rpc("request_group_access", { invite_code: inviteCode.trim() });
+            if (error) throw error;
+            setInviteCode("");
+            setRequestMessage("Request sent. The Owner must approve it before you can access the group.");
+            setRefreshVersion(value => value + 1);
+        } catch (error) {
+            setError(groupErrorMessage(error));
+        } finally {
+            setRequesting(false);
+        }
+    }
+
     async function handleSignOut() {
-        if (creating || signingOut) return;
+        if (busy) return;
         setError("");
         setSigningOut(true);
         try {
@@ -114,7 +145,7 @@ function SignedInGroups({ userId }: { userId: string }) {
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            <Pressable accessibilityRole="button" disabled={creating || signingOut} onPress={() => router.canGoBack() ? router.back() : router.replace("/")} style={[styles.secondaryButton, styles.backButton]}>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.canGoBack() ? router.back() : router.replace("/")} style={[styles.secondaryButton, styles.backButton]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
             <Text style={styles.title}>Groups</Text>
@@ -127,26 +158,56 @@ function SignedInGroups({ userId }: { userId: string }) {
                 placeholder="Enter a group name"
                 placeholderTextColor="#79665E"
                 maxLength={100}
-                editable={!creating && !signingOut}
+                editable={!busy}
                 style={styles.input}
             />
-            <Pressable accessibilityRole="button" disabled={loading || creating || signingOut} onPress={handleCreate} style={[styles.primaryButton, (loading || creating || signingOut) && styles.disabled]}>
+            <Pressable accessibilityRole="button" disabled={loading || busy} onPress={handleCreate} style={[styles.primaryButton, (loading || busy) && styles.disabled]}>
                 <Text style={styles.primaryText}>{creating ? "Creating..." : "Create Group"}</Text>
             </Pressable>
+            <Text style={styles.label}>Join a private group</Text>
+            <TextInput
+                accessibilityLabel="Invite code"
+                value={inviteCode}
+                onChangeText={setInviteCode}
+                placeholder="Paste an invite code"
+                placeholderTextColor="#79665E"
+                autoCapitalize="none"
+                autoCorrect={false}
+                autoComplete="off"
+                maxLength={64}
+                editable={!busy}
+                style={styles.input}
+            />
+            <Pressable accessibilityRole="button" disabled={loading || busy} onPress={handleRequest} style={[styles.primaryButton, (loading || busy) && styles.disabled]}>
+                <Text style={styles.primaryText}>{requesting ? "Sending request..." : "Request Access"}</Text>
+            </Pressable>
+            {requestMessage !== "" && <Text style={styles.message}>{requestMessage}</Text>}
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
             {loading ? <Text style={styles.message}>Loading groups...</Text> : (
                 <>
                     {loadError === "" && groups.length === 0 && <Text style={styles.message}>No groups yet. Create your first group above!</Text>}
                     {groups.map(group => (
-                        <View key={group.id} style={styles.card}>
+                        <Pressable key={group.id} accessibilityRole="button" disabled={busy} onPress={() => router.push({ pathname: "/group/[id]", params: { id: group.id } })} style={styles.card}>
                             <Text style={styles.cardTitle}>{group.name}</Text>
                             <Text style={styles.message}>{group.owner_user_id === userId ? "Owner" : "Member"}</Text>
+                        </Pressable>
+                    ))}
+                    {requests.length > 0 && <Text style={styles.label}>Your join requests</Text>}
+                    {requests.map(request => (
+                        <View key={request.id} style={styles.card}>
+                            <Text style={styles.cardTitle}>
+                                {request.status === "pending" ? "Pending approval" : request.status === "approved" ? "Approved" : "Denied"}
+                            </Text>
+                            <Text style={styles.message}>Requested {new Date(request.requested_at).toLocaleDateString()}</Text>
                         </View>
                     ))}
                 </>
             )}
-            <Pressable accessibilityRole="button" disabled={creating || signingOut} onPress={handleSignOut} style={styles.secondaryButton}>
+            <Pressable accessibilityRole="button" disabled={busy || loading} onPress={() => setRefreshVersion(value => value + 1)} style={styles.secondaryButton}>
+                <Text style={styles.secondaryText}>Refresh Groups and Requests</Text>
+            </Pressable>
+            <Pressable accessibilityRole="button" disabled={busy} onPress={handleSignOut} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>{signingOut ? "Signing out..." : "Sign Out"}</Text>
             </Pressable>
         </ScrollView>

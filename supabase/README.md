@@ -23,3 +23,33 @@ Manual checks after applying the migration:
 - Use `tests/foundation.sql` in SQL Editor for transactional schema/RLS checks. It uses two existing test accounts, rolls all changes back, and requires two users to have signed up first.
 
 Implementation references: [React Native auth](https://supabase.com/docs/guides/auth/quickstarts/react-native), [profile triggers](https://supabase.com/docs/guides/auth/managing-user-data), [RLS](https://supabase.com/docs/guides/database/postgres/row-level-security).
+
+## Milestone 9: private invites and approval
+
+Milestone 8 must already be applied. In **SQL Editor → New query**, paste the complete contents of `migrations/20261004000200_private_group_invites.sql` and **Run once**. Do not rerun or modify Milestone 8's migration. The new migration adds only invites, join requests, and supporting RPCs/policies/indexes. It enables `pgcrypto` in the `extensions` schema; if your project has it installed in another schema, the migration stops with an explicit message rather than moving it silently. No new environment variables or auth dashboard settings are required.
+
+From Groups, tap an owned group, then **Generate / Reset Invite Code**. The code is returned only on generation, is selectable for copying, and is kept only in screen memory. Leaving the screen clears it. Codes use 32 cryptographically random bytes, are stored only as SHA-256 hashes, and expire after seven days. Resetting or revoking blocks new requests using the previous code; already-pending requests remain available for the Owner to decide.
+
+A signed-in person pastes the code into **Join a private group → Request Access**. This creates a pending request and does not grant group access. The requester sees only their request status/date; group names and contents remain private until approval. Denied users may submit a new request with an active code. Current members cannot request again.
+
+Owners see pending requester display names on Group Details through an Owner-only RPC. **Approve** creates membership and records the decision in one transaction; **Deny** records the decision without membership. Repeating the same decision is safe; changing a completed decision is rejected. All mutation RPCs lock the group before child rows. Database grants deny direct invite/request/membership writes. Existing profile visibility and group RLS are preserved.
+
+The Groups and Group Details screens reload when focused and also have Refresh controls. After another account approves a request, refresh Groups or leave and return; the group should appear with the Member role. This milestone does not add realtime subscriptions or deep links.
+
+After applying the migration, test with an Owner and two other accounts:
+
+- Generate a code, submit it from a second account, and confirm a duplicate pending submission is rejected and the private group is still invisible.
+- Approve as Owner, then refresh the requester account. Confirm exactly one membership and an approved request.
+- Request with a third account, deny, then request again using the still-valid code.
+- Reset or revoke the code and confirm the old code cannot create another request. The requester must not have Owner controls after becoming a Member.
+- Run `tests/private_group_invites.sql` in SQL Editor for RLS/RPC checks with three signed-up test accounts. Its fixtures, temporary helpers, and codes roll back. Do not paste usable codes or credentials into source files or logs.
+
+Crypto reference: [PostgreSQL pgcrypto](https://www.postgresql.org/docs/current/pgcrypto.html).
+
+### Milestone 9 polish: current members
+
+After the invite migration is applied, run `migrations/20261004000300_group_member_roster.sql` once in **SQL Editor → New query**. Do not modify or rerun the applied migrations. It adds only `get_group_members(target_group_id)`, a member-only RPC returning user IDs, display names, and an Owner flag. It exposes no emails and does not change profile or membership RLS.
+
+Both Owners and Members see **Current members** on Group Details. **Refresh Group**, returning to the screen, and approving a request reload the roster. On Groups, approved requests disappear once the matching group is visible through membership; pending and denied requests remain visible.
+
+Run `tests/group_member_roster.sql` after applying the new migration with three signed-up test accounts. It checks Owner/Member access, pending and unrelated user denial, limited return fields, and unchanged direct profile/membership privacy. All test fixtures roll back.
