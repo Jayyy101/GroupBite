@@ -92,6 +92,20 @@ export type GroupRestaurantSummary = {
 
 export type GroupVisit = Pick<Visit, "id" | "visited_on" | "rating" | "would_go_again" | "notes" | "created_at"> & {
     creator_display_name: string;
+    can_manage: boolean;
+};
+
+export type VisitScope = {
+    target_group_id: string;
+    target_group_restaurant_id: string;
+    target_visit_id: string;
+};
+
+export type UpdateVisitArgs = VisitScope & {
+    visit_date: string | null;
+    visit_rating: number | null;
+    visit_would_go_again: boolean | null;
+    visit_notes: string | null;
 };
 
 export type SaveVisitArgs = {
@@ -175,6 +189,8 @@ export type Database = {
             get_pending_join_requests: { Args: { target_group_id: string }; Returns: PendingJoinRequest[] };
             get_group_members: { Args: { target_group_id: string }; Returns: GroupMember[] };
             save_restaurant_visit: { Args: SaveVisitArgs; Returns: string };
+            update_group_visit: { Args: UpdateVisitArgs; Returns: undefined };
+            delete_group_visit: { Args: VisitScope; Returns: boolean };
             get_group_restaurants: { Args: { target_group_id: string }; Returns: GroupRestaurantSummary[] };
             get_group_restaurant_visits: { Args: { target_group_restaurant_id: string }; Returns: GroupVisit[] };
         };

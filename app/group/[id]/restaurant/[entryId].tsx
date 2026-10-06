@@ -1,3 +1,4 @@
+import { VisitManagement } from "@/components/visit-management";
 import { isUuid, visitSummary } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
@@ -33,6 +34,9 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
     const [refreshVersion, setRefreshVersion] = useState(0);
+    const [management, setManagement] = useState<{ visitId: string; action: "edit" | "delete" } | null>(null);
+    const [busy, setBusy] = useState(false);
+    const [message, setMessage] = useState("");
     const isFocused = useIsFocused();
 
     useEffect(() => {
@@ -43,6 +47,8 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
             setError("");
             setRestaurant(null);
             setVisits([]);
+            setManagement(null);
+            setBusy(false);
             try {
                 const summaries = await supabase.rpc("get_group_restaurants", { target_group_id: groupId });
                 if (summaries.error) throw summaries.error;
@@ -66,12 +72,13 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
     }, [groupId, entryId, isFocused, refreshVersion]);
 
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" onPress={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })} style={[styles.secondaryButton, styles.backButton]}>
+        <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+            <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })} style={[styles.secondaryButton, styles.backButton, busy && styles.disabled]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
             <Text style={styles.title}>{restaurant?.name ?? "Restaurant"}</Text>
             {error !== "" && <Text style={styles.error}>{error}</Text>}
+            {message !== "" && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}
             {loading ? <Text style={styles.message}>Loading restaurant and visits...</Text> : !restaurant ? (
                 <Text style={styles.message}>This restaurant could not be found or you do not have access.</Text>
             ) : (
@@ -79,7 +86,7 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                     <Text style={styles.message}>{restaurant.address}</Text>
                     {restaurant.cuisine && <Text style={styles.message}>{restaurant.cuisine}</Text>}
                     <Text style={styles.message}>{visitSummary(restaurant)}</Text>
-                    <Pressable accessibilityRole="button" onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: restaurant.restaurant_id } })} style={styles.primaryButton}>
+                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: restaurant.restaurant_id } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Another Visit</Text>
                     </Pressable>
                     <Text style={styles.label}>This group&apos;s visits</Text>
@@ -91,11 +98,40 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                             {visit.rating !== null && <Text style={styles.message}>Rating: {visit.rating}/5</Text>}
                             {visit.would_go_again !== null && <Text style={styles.message}>Would go again: {visit.would_go_again ? "Yes" : "No"}</Text>}
                             {visit.notes && <Text style={styles.message}>{visit.notes}</Text>}
+                            {management?.visitId === visit.id ? (
+                                <VisitManagement
+                                    key={`${visit.id}:${management.action}`}
+                                    visit={visit}
+                                    scope={{ target_group_id: groupId, target_group_restaurant_id: entryId, target_visit_id: visit.id }}
+                                    action={management.action}
+                                    onCancel={() => setManagement(null)}
+                                    onBusyChange={setBusy}
+                                    onComplete={entryRemoved => {
+                                        const action = management.action;
+                                        setManagement(null);
+                                        if (entryRemoved) {
+                                            router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
+                                        } else {
+                                            setMessage(action === "edit" ? "Visit updated." : "Visit deleted.");
+                                            setRefreshVersion(value => value + 1);
+                                        }
+                                    }}
+                                />
+                            ) : visit.can_manage && (
+                                <>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visitId: visit.id, action: "edit" }); }} style={[styles.secondaryButton, management !== null && styles.disabled]}>
+                                        <Text style={styles.secondaryText}>Edit Visit</Text>
+                                    </Pressable>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Delete visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visitId: visit.id, action: "delete" }); }} style={[styles.secondaryButton, management !== null && styles.disabled]}>
+                                        <Text style={styles.secondaryText}>Delete Visit</Text>
+                                    </Pressable>
+                                </>
+                            )}
                         </View>
                     ))}
                 </>
             )}
-            <Pressable accessibilityRole="button" disabled={loading} onPress={() => setRefreshVersion(value => value + 1)} style={styles.secondaryButton}>
+            <Pressable accessibilityRole="button" disabled={loading || management !== null} onPress={() => { setMessage(""); setRefreshVersion(value => value + 1); }} style={[styles.secondaryButton, (loading || management !== null) && styles.disabled]}>
                 <Text style={styles.secondaryText}>Refresh Restaurant</Text>
             </Pressable>
         </ScrollView>

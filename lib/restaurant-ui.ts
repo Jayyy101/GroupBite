@@ -32,3 +32,17 @@ export function restaurantErrorMessage(error: unknown): string {
             return "Could not save the visit. Check your connection and retry with the same details.";
     }
 }
+
+export function visitManagementErrorMessage(error: unknown, action: "edit" | "delete"): string {
+    const message = error && typeof error === "object" && "message" in error ? error.message : undefined;
+    switch (message) {
+        case "Visit not found or access denied.":
+            return "This visit is no longer available, or you do not have permission to manage it. Cancel and refresh the restaurant.";
+        case "Check the optional visit fields.":
+            return message;
+        case "Sign in first.":
+            return "Please sign in before managing a visit.";
+        default:
+            return `Could not ${action === "edit" ? "update" : "delete"} the visit. Check your connection, then retry or cancel and refresh to check its status.`;
+    }
+}
