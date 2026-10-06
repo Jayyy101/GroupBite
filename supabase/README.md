@@ -53,3 +53,25 @@ After the invite migration is applied, run `migrations/20261004000300_group_memb
 Both Owners and Members see **Current members** on Group Details. **Refresh Group**, returning to the screen, and approving a request reload the roster. On Groups, approved requests disappear once the matching group is visible through membership; pending and denied requests remain visible.
 
 Run `tests/group_member_roster.sql` after applying the new migration with three signed-up test accounts. It checks Owner/Member access, pending and unrelated user denial, limited return fields, and unchanged direct profile/membership privacy. All test fixtures roll back.
+
+## Milestone 10: shared restaurants, private group visits
+
+With migrations 1–3 already applied, open **SQL Editor → New query**, paste the complete `migrations/20261004000400_restaurants_and_visits.sql`, and **Run once**. Do not rerun or modify earlier migrations. No dashboard settings, environment variables, or app dependencies change.
+
+The migration adds global `restaurants`, private `group_restaurants` (unique group/location), and private `visits`. It also adds a locked-down `visit_save_requests` receipt table for retries. Receipts hold only the caller's request ID, a normalized payload hash, and the resulting restaurant ID; clients cannot read or write them. Every new table has RLS enabled. Direct client writes are denied, including writes by group Owners to shared facts.
+
+`save_restaurant_visit(...)` checks the caller's membership in **every** selected group before writing anything. It locks groups in sorted order and creates all facts, entries, visits, and the receipt in one transaction. Exact, case-sensitive **trimmed name + address** matches reuse global facts without overwriting cuisine. Different addresses are different locations; fuzzy matching is not used. A group's existing entry is reused, but each new submission creates a separate Visit. Different groups get independent Visit IDs and contents.
+
+The form keeps a non-secret retry ID in screen memory and reuses it when retrying unchanged details. The database scopes IDs to `auth.uid()`, serializes competing retries, and rejects a reused ID with a different payload. Opening a new form creates a new submission and allows legitimate repeated visits. Retry identity does not survive closing/restarting the app.
+
+`get_group_restaurants(...)` checks current membership and calculates `avg(rating)`, rated visit count, and total visit count for that group only. Unrated visits do not affect the average. `get_group_restaurant_visits(...)` checks membership and exposes only that entry's visits and their creator display names. Global facts are readable by authenticated users; private entries/visits require current membership. Profiles and membership policies are unchanged. All RPCs use `SECURITY DEFINER`, empty `search_path`, explicit caller checks, and schema-qualified objects.
+
+App flow: **Groups → Add Restaurant / Visit**, or open a group to start with that group selected. Enter required name/address, optional cuisine/date (`YYYY-MM-DD`)/rating/would-go-again/notes, then select one or more groups. After saving, a single-group save returns to that group; a multi-group save returns to Groups. Tap a saved restaurant for its group-specific summary and visits. **Add Another Visit** pre-fills read-only shared facts and starts a new memory. Screens remain scrollable and refresh on focus or through Refresh controls. Local Places remain separate and unchanged.
+
+Validation:
+
+- Run `tests/restaurants_and_visits.sql` with three signed-up test accounts after applying the migration. It checks membership/RLS, creator identity, exact reuse, separate locations and memories, retry safety, ratings, and whole-transaction rollback (including a simulated failure after the first group's visit). Its fixtures roll back. Earlier SQL suites should still pass.
+- Check with two accounts: save the same name/address into the same group independently. There should be one restaurant card and two visits. Save into two groups and verify independent counts/notes; a pending requester must see neither group's private visits.
+- For a true overlapping-writer test, use an isolated local PostgreSQL database and two connections: start a transaction as one authenticated member, call the save RPC, and hold the transaction open. From a second member's transaction, call it for the same group/location with a different request ID. The second call should wait. Commit the first, then the second; assert one GroupRestaurant and two Visits. Repeat with the same user/request ID/payload and assert only one Visit per selected group. Also test the same location across different groups to exercise the global unique constraint. Do not run fixture/concurrency setup against production data.
+
+Implementation references: [PostgreSQL ON CONFLICT](https://www.postgresql.org/docs/current/sql-insert.html), [Supabase database functions](https://supabase.com/docs/guides/database/functions).

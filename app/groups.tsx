@@ -186,6 +186,11 @@ function SignedInGroups({ userId }: { userId: string }) {
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
             {loading ? <Text style={styles.message}>Loading groups...</Text> : (
                 <>
+                    {groups.length > 0 && (
+                        <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.push("/add-visit")} style={styles.primaryButton}>
+                            <Text style={styles.primaryText}>Add Restaurant / Visit</Text>
+                        </Pressable>
+                    )}
                     {loadError === "" && groups.length === 0 && <Text style={styles.message}>No groups yet. Create your first group above!</Text>}
                     {groups.map(group => (
                         <Pressable key={group.id} accessibilityRole="button" disabled={busy} onPress={() => router.push({ pathname: "/group/[id]", params: { id: group.id } })} style={styles.card}>

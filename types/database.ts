@@ -50,6 +50,62 @@ export type GroupInvite = {
     revoked_at: string | null;
 };
 
+export type Restaurant = {
+    id: string;
+    name: string;
+    address: string;
+    cuisine: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export type GroupRestaurant = {
+    id: string;
+    group_id: string;
+    restaurant_id: string;
+    created_by: string;
+    created_at: string;
+};
+
+export type Visit = {
+    id: string;
+    group_restaurant_id: string;
+    created_by: string;
+    visited_on: string | null;
+    rating: number | null;
+    would_go_again: boolean | null;
+    notes: string | null;
+    created_at: string;
+    updated_at: string;
+};
+
+export type GroupRestaurantSummary = {
+    id: string;
+    restaurant_id: string;
+    name: string;
+    address: string;
+    cuisine: string | null;
+    average_rating: number | null;
+    rated_visit_count: number;
+    total_visit_count: number;
+};
+
+export type GroupVisit = Pick<Visit, "id" | "visited_on" | "rating" | "would_go_again" | "notes" | "created_at"> & {
+    creator_display_name: string;
+};
+
+export type SaveVisitArgs = {
+    client_request_id: string;
+    target_group_ids: string[];
+    restaurant_name: string;
+    restaurant_address: string;
+    restaurant_cuisine?: string | null;
+    visit_date?: string | null;
+    visit_rating?: number | null;
+    visit_would_go_again?: boolean | null;
+    visit_notes?: string | null;
+};
+
 // Types for the applied schema; database permissions restrict writes.
 export type Database = {
     public: {
@@ -84,6 +140,30 @@ export type Database = {
                 Update: never;
                 Relationships: [];
             };
+            restaurants: {
+                Row: Restaurant;
+                Insert: never;
+                Update: never;
+                Relationships: [];
+            };
+            group_restaurants: {
+                Row: GroupRestaurant;
+                Insert: never;
+                Update: never;
+                Relationships: [];
+            };
+            visits: {
+                Row: Visit;
+                Insert: never;
+                Update: never;
+                Relationships: [];
+            };
+            visit_save_requests: {
+                Row: { user_id: string; request_id: string; payload_hash: string; restaurant_id: string | null; created_at: string };
+                Insert: never;
+                Update: never;
+                Relationships: [];
+            };
         };
         Views: { [_ in never]: never };
         Functions: {
@@ -94,6 +174,9 @@ export type Database = {
             decide_join_request: { Args: { target_request_id: string; decision: "approved" | "denied" }; Returns: undefined };
             get_pending_join_requests: { Args: { target_group_id: string }; Returns: PendingJoinRequest[] };
             get_group_members: { Args: { target_group_id: string }; Returns: GroupMember[] };
+            save_restaurant_visit: { Args: SaveVisitArgs; Returns: string };
+            get_group_restaurants: { Args: { target_group_id: string }; Returns: GroupRestaurantSummary[] };
+            get_group_restaurant_visits: { Args: { target_group_restaurant_id: string }; Returns: GroupVisit[] };
         };
         Enums: { [_ in never]: never };
         CompositeTypes: { [_ in never]: never };

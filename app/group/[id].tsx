@@ -1,8 +1,9 @@
 import { groupErrorMessage } from "@/lib/group-errors";
+import { visitSummary } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
-import type { Group, GroupMember, PendingJoinRequest } from "@/types/database";
+import type { Group, GroupMember, GroupRestaurantSummary, PendingJoinRequest } from "@/types/database";
 import * as Clipboard from "expo-clipboard";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
@@ -35,6 +36,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
     const router = useRouter();
     const [group, setGroup] = useState<Group | null>(null);
     const [members, setMembers] = useState<GroupMember[]>([]);
+    const [restaurants, setRestaurants] = useState<GroupRestaurantSummary[]>([]);
     const [requests, setRequests] = useState<PendingJoinRequest[]>([]);
     const [inviteExpires, setInviteExpires] = useState<string | null | undefined>();
     const [rawCode, setRawCode] = useState("");
@@ -62,12 +64,18 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
                 if (!active) return;
                 setGroup(result.data);
                 if (result.data) {
-                    const membersResult = await supabase.rpc("get_group_members", { target_group_id: groupId });
+                    const [membersResult, restaurantsResult] = await Promise.all([
+                        supabase.rpc("get_group_members", { target_group_id: groupId }),
+                        supabase.rpc("get_group_restaurants", { target_group_id: groupId }),
+                    ]);
                     if (membersResult.error) throw membersResult.error;
+                    if (restaurantsResult.error) throw restaurantsResult.error;
                     if (!active) return;
                     setMembers(membersResult.data);
+                    setRestaurants(restaurantsResult.data);
                 } else {
                     setMembers([]);
+                    setRestaurants([]);
                 }
                 if (result.data?.owner_user_id === userId) {
                     const [inviteResult, requestsResult] = await Promise.all([
@@ -162,6 +170,19 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
             ) : (
                 <>
                     <Text style={styles.message}>{isOwner ? "You are the Owner." : "You are a Member."}</Text>
+                    <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.push({ pathname: "/add-visit", params: { groupId } })} style={styles.primaryButton}>
+                        <Text style={styles.primaryText}>Add Restaurant / Visit</Text>
+                    </Pressable>
+                    <Text style={styles.label}>Saved restaurants</Text>
+                    {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Add your first visit above!</Text>}
+                    {restaurants.map(restaurant => (
+                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={busy} onPress={() => router.push({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: groupId, entryId: restaurant.id } })} style={styles.card}>
+                            <Text style={styles.cardTitle}>{restaurant.name}</Text>
+                            <Text style={styles.message}>{restaurant.address}</Text>
+                            {restaurant.cuisine && <Text style={styles.message}>{restaurant.cuisine}</Text>}
+                            <Text style={styles.message}>{visitSummary(restaurant)}</Text>
+                        </Pressable>
+                    ))}
                     <Text style={styles.label}>Current members</Text>
                     {members.map(member => (
                         <View key={member.user_id} style={styles.card}>
