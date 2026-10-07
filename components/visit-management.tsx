@@ -1,4 +1,5 @@
 import { isVisitDate, visitManagementErrorMessage } from "@/lib/restaurant-ui";
+import { isGroupAccessDenied } from "@/lib/group-errors";
 import { supabase } from "@/lib/supabase";
 import { backendStyles as styles } from "@/styles/backend";
 import type { GroupVisit, VisitScope } from "@/types/database";
@@ -12,9 +13,10 @@ type Props = {
     onCancel: () => void;
     onBusyChange: (busy: boolean) => void;
     onComplete: (entryRemoved: boolean) => void;
+    onAccessDenied?: () => void;
 };
 
-export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, onComplete }: Props) {
+export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, onComplete, onAccessDenied }: Props) {
     const [visitedOn, setVisitedOn] = useState(visit.visited_on ?? "");
     const [rating, setRating] = useState(visit.rating);
     const [wouldGoAgain, setWouldGoAgain] = useState(visit.would_go_again);
@@ -58,7 +60,10 @@ export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, 
             }
             succeeded = true;
         } catch (error) {
-            if (mounted.current) setError(visitManagementErrorMessage(error, action));
+            if (mounted.current) {
+                setError(visitManagementErrorMessage(error, action));
+                if (isGroupAccessDenied(error)) onAccessDenied?.();
+            }
         } finally {
             submitting.current = false;
             if (mounted.current) {

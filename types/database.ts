@@ -15,6 +15,13 @@ type Membership = {
     group_id: string;
     user_id: string;
     joined_at: string;
+    membership_id: string;
+};
+
+export type GroupMembershipTarget = {
+    user_id: string;
+    membership_id: string;
+    display_name: string;
 };
 
 export type JoinRequest = {
@@ -188,6 +195,10 @@ export type Database = {
             decide_join_request: { Args: { target_request_id: string; decision: "approved" | "denied" }; Returns: undefined };
             get_pending_join_requests: { Args: { target_group_id: string }; Returns: PendingJoinRequest[] };
             get_group_members: { Args: { target_group_id: string }; Returns: GroupMember[] };
+            get_group_membership_targets: { Args: { target_group_id: string }; Returns: GroupMembershipTarget[] };
+            leave_group: { Args: { target_group_id: string; expected_membership_id: string }; Returns: undefined };
+            remove_group_member: { Args: { target_group_id: string; target_user_id: string; expected_membership_id: string }; Returns: undefined };
+            transfer_group_ownership: { Args: { target_group_id: string; target_user_id: string; expected_membership_id: string }; Returns: undefined };
             save_restaurant_visit: { Args: SaveVisitArgs; Returns: string };
             update_group_visit: { Args: UpdateVisitArgs; Returns: undefined };
             delete_group_visit: { Args: VisitScope; Returns: boolean };

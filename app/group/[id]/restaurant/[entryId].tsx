@@ -1,10 +1,11 @@
 import { VisitManagement } from "@/components/visit-management";
+import { useGroupAccess } from "@/hooks/use-group-access";
+import { isGroupAccessDenied } from "@/lib/group-errors";
 import { isUuid, visitSummary } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { GroupRestaurantSummary, GroupVisit } from "@/types/database";
-import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, Text, View } from "react-native";
@@ -14,7 +15,7 @@ export default function GroupRestaurantScreen() {
     const { id, entryId } = useLocalSearchParams<{ id?: string | string[]; entryId?: string | string[] }>();
     const { session, loading } = useAuth();
     if (!loading && session && isUuid(id) && isUuid(entryId)) {
-        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} />;
+        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} />;
     }
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -27,28 +28,41 @@ export default function GroupRestaurantScreen() {
     );
 }
 
-function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: string }) {
+function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entryId: string; userId: string }) {
     const router = useRouter();
     const [restaurant, setRestaurant] = useState<GroupRestaurantSummary | null>(null);
     const [visits, setVisits] = useState<GroupVisit[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [detailsLoading, setDetailsLoading] = useState(true);
+    const [loadedAccessKey, setLoadedAccessKey] = useState("");
     const [error, setError] = useState("");
     const [refreshVersion, setRefreshVersion] = useState(0);
     const [management, setManagement] = useState<{ visitId: string; action: "edit" | "delete" } | null>(null);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState("");
-    const isFocused = useIsFocused();
+    const { access, loading: accessLoading, error: accessError } = useGroupAccess(groupId, userId, refreshVersion);
+    const accessKey = access ? `${access.membershipId}:${access.group.owner_user_id}` : "";
+    const loading = accessLoading || detailsLoading || (!!access && loadedAccessKey !== accessKey);
+    const visibleRestaurant = access && loadedAccessKey === accessKey ? restaurant : null;
+
+    function refreshAccess() {
+        setRestaurant(null);
+        setVisits([]);
+        setManagement(null);
+        setBusy(false);
+        setRefreshVersion(value => value + 1);
+    }
 
     useEffect(() => {
-        if (!isFocused) return;
+        setRestaurant(null);
+        setVisits([]);
+        setManagement(null);
+        setBusy(false);
+        setLoadedAccessKey("");
+        setDetailsLoading(!!access);
+        if (!access) return;
         let active = true;
         async function loadDetails() {
-            setLoading(true);
             setError("");
-            setRestaurant(null);
-            setVisits([]);
-            setManagement(null);
-            setBusy(false);
             try {
                 const summaries = await supabase.rpc("get_group_restaurants", { target_group_id: groupId });
                 if (summaries.error) throw summaries.error;
@@ -61,32 +75,39 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                     setRestaurant(selected);
                     setVisits(result.data);
                 }
-            } catch {
-                if (active) setError("Could not load this restaurant, or you do not have access. Check your connection and refresh.");
+            } catch (error) {
+                if (active) {
+                    setError("Could not load this restaurant, or you do not have access. Check your connection and refresh.");
+                    if (isGroupAccessDenied(error)) setRefreshVersion(value => value + 1);
+                }
             } finally {
-                if (active) setLoading(false);
+                if (active) {
+                    setLoadedAccessKey(accessKey);
+                    setDetailsLoading(false);
+                }
             }
         }
         loadDetails();
         return () => { active = false; };
-    }, [groupId, entryId, isFocused, refreshVersion]);
+    }, [groupId, entryId, access, accessKey]);
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
             <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })} style={[styles.secondaryButton, styles.backButton, busy && styles.disabled]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
-            <Text style={styles.title}>{restaurant?.name ?? "Restaurant"}</Text>
+            <Text style={styles.title}>{visibleRestaurant?.name ?? "Restaurant"}</Text>
             {error !== "" && <Text style={styles.error}>{error}</Text>}
+            {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {message !== "" && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}
-            {loading ? <Text style={styles.message}>Loading restaurant and visits...</Text> : !restaurant ? (
+            {loading ? <Text style={styles.message}>Loading restaurant and visits...</Text> : !visibleRestaurant ? (
                 <Text style={styles.message}>This restaurant could not be found or you do not have access.</Text>
             ) : (
                 <>
-                    <Text style={styles.message}>{restaurant.address}</Text>
-                    {restaurant.cuisine && <Text style={styles.message}>{restaurant.cuisine}</Text>}
-                    <Text style={styles.message}>{visitSummary(restaurant)}</Text>
-                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: restaurant.restaurant_id } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
+                    <Text style={styles.message}>{visibleRestaurant.address}</Text>
+                    {visibleRestaurant.cuisine && <Text style={styles.message}>{visibleRestaurant.cuisine}</Text>}
+                    <Text style={styles.message}>{visitSummary(visibleRestaurant)}</Text>
+                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Another Visit</Text>
                     </Pressable>
                     <Text style={styles.label}>This group&apos;s visits</Text>
@@ -106,6 +127,10 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                                     action={management.action}
                                     onCancel={() => setManagement(null)}
                                     onBusyChange={setBusy}
+                                    onAccessDenied={() => {
+                                        setMessage("Your access or Visit permissions changed. Review the refreshed group before continuing.");
+                                        refreshAccess();
+                                    }}
                                     onComplete={entryRemoved => {
                                         const action = management.action;
                                         setManagement(null);
@@ -113,7 +138,7 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                                             router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
                                         } else {
                                             setMessage(action === "edit" ? "Visit updated." : "Visit deleted.");
-                                            setRefreshVersion(value => value + 1);
+                                            refreshAccess();
                                         }
                                     }}
                                 />
@@ -131,7 +156,7 @@ function RestaurantDetails({ groupId, entryId }: { groupId: string; entryId: str
                     ))}
                 </>
             )}
-            <Pressable accessibilityRole="button" disabled={loading || management !== null} onPress={() => { setMessage(""); setRefreshVersion(value => value + 1); }} style={[styles.secondaryButton, (loading || management !== null) && styles.disabled]}>
+            <Pressable accessibilityRole="button" disabled={loading || management !== null} onPress={() => { setMessage(""); refreshAccess(); }} style={[styles.secondaryButton, (loading || management !== null) && styles.disabled]}>
                 <Text style={styles.secondaryText}>Refresh Restaurant</Text>
             </Pressable>
         </ScrollView>

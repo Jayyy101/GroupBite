@@ -1,8 +1,11 @@
 import { isUuid, isVisitDate, restaurantErrorMessage } from "@/lib/restaurant-ui";
+import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
+import { isGroupAccessDenied } from "@/lib/group-errors";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { Group, SaveVisitArgs } from "@/types/database";
+import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
@@ -42,11 +45,19 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
     const [saving, setSaving] = useState(false);
     const [refreshVersion, setRefreshVersion] = useState(0);
     const lastSubmission = useRef<{ payload: string; requestId: string } | null>(null);
+    const isFocused = useIsFocused();
+    const { version: foregroundVersion, isActive } = useForegroundRefresh();
 
     useEffect(() => {
+        setGroups([]);
+        setLoading(true);
+        if (!isFocused || !isActive) return;
         let active = true;
-        async function loadForm() {
-            setLoading(true);
+        let pending = false;
+        let restaurantLoaded = restaurantId === undefined;
+        async function loadForm(includeRestaurant = false) {
+            if (pending) return;
+            pending = true;
             setLoadError("");
             try {
                 const result = await supabase.from("groups").select("*").order("name");
@@ -54,7 +65,7 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
                 if (!active) return;
                 setGroups(result.data);
                 setSelectedGroups(selected => selected.filter(id => result.data.some(group => group.id === id)));
-                if (restaurantId !== undefined) {
+                if ((includeRestaurant || !restaurantLoaded) && restaurantId !== undefined) {
                     if (!isUuid(restaurantId)) throw new Error("Invalid restaurant");
                     const restaurant = await supabase.from("restaurants").select("*").eq("id", restaurantId).single();
                     if (restaurant.error) throw restaurant.error;
@@ -62,17 +73,23 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
                         setName(restaurant.data.name);
                         setAddress(restaurant.data.address);
                         setCuisine(restaurant.data.cuisine ?? "");
+                        restaurantLoaded = true;
                     }
                 }
             } catch {
-                if (active) setLoadError("Could not load groups or restaurant details. Check your connection and refresh.");
+                if (active) {
+                    setGroups([]);
+                    setLoadError("Could not load groups or restaurant details. Check your connection and refresh.");
+                }
             } finally {
+                pending = false;
                 if (active) setLoading(false);
             }
         }
-        loadForm();
-        return () => { active = false; };
-    }, [restaurantId, refreshVersion]);
+        loadForm(true);
+        const timer = setInterval(() => { loadForm(); }, 15000);
+        return () => { active = false; clearInterval(timer); };
+    }, [restaurantId, refreshVersion, isFocused, isActive, foregroundVersion]);
 
     async function handleSave() {
         if (saving || loading || loadError !== "") return;
@@ -112,6 +129,10 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             if (error) throw error;
         } catch (error) {
             setError(restaurantErrorMessage(error));
+            if (isGroupAccessDenied(error)) {
+                setGroups([]);
+                setRefreshVersion(value => value + 1);
+            }
             return;
         } finally {
             setSaving(false);

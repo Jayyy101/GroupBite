@@ -1,4 +1,5 @@
 import { authErrorMessage } from "@/lib/auth-errors";
+import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { groupErrorMessage } from "@/lib/group-errors";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
@@ -52,12 +53,18 @@ function SignedInGroups({ userId }: { userId: string }) {
     const [refreshVersion, setRefreshVersion] = useState(0);
     const busy = creating || requesting || signingOut;
     const isFocused = useIsFocused();
+    const { version: foregroundVersion, isActive } = useForegroundRefresh();
 
     useEffect(() => {
-        if (!isFocused) return;
+        setGroups([]);
+        setRequests([]);
+        setLoading(true);
+        if (!isFocused || !isActive) return;
         let active = true;
+        let pending = false;
         async function loadGroups() {
-            setLoading(true);
+            if (pending) return;
+            pending = true;
             setLoadError("");
             try {
                 const [groupsResult, profileResult, requestsResult] = await Promise.all([
@@ -77,14 +84,20 @@ function SignedInGroups({ userId }: { userId: string }) {
                     ));
                 }
             } catch {
-                if (active) setLoadError("Could not load your groups. Check your connection and return to this screen to try again.");
+                if (active) {
+                    setGroups([]);
+                    setRequests([]);
+                    setLoadError("Could not load your groups. Check your connection and refresh.");
+                }
             } finally {
+                pending = false;
                 if (active) setLoading(false);
             }
         }
         loadGroups();
-        return () => { active = false; };
-    }, [userId, isFocused, refreshVersion]);
+        const timer = setInterval(loadGroups, 15000);
+        return () => { active = false; clearInterval(timer); };
+    }, [userId, isFocused, isActive, foregroundVersion, refreshVersion]);
 
     async function handleCreate() {
         if (busy || loading) return;
@@ -202,8 +215,9 @@ function SignedInGroups({ userId }: { userId: string }) {
                     {requests.map(request => (
                         <View key={request.id} style={styles.card}>
                             <Text style={styles.cardTitle}>
-                                {request.status === "pending" ? "Pending approval" : request.status === "approved" ? "Approved" : "Denied"}
+                                {request.status === "pending" ? "Pending approval" : request.status === "approved" ? "Previously approved" : "Denied"}
                             </Text>
+                            {request.status === "approved" && <Text style={styles.message}>This past approval does not grant current access. To rejoin, request access with an active invite code.</Text>}
                             <Text style={styles.message}>Requested {new Date(request.requested_at).toLocaleDateString()}</Text>
                         </View>
                     ))}
