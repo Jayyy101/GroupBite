@@ -19,11 +19,16 @@ export default function AddVisitScreen() {
     }
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, styles.backButton]}>
+            <Pressable accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace("/groups")} style={[styles.secondaryButton, styles.backButton]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
             <Text style={styles.title}>Add Restaurant / Visit</Text>
-            <Text style={styles.message}>{loading ? "Restoring your session..." : "Sign in from Groups to save a visit."}</Text>
+            <Text style={styles.message}>{loading ? "Restoring your session..." : "Sign in to save a restaurant visit to your groups."}</Text>
+            {!loading && (
+                <Pressable accessibilityRole="button" onPress={() => router.push("/auth")} style={styles.primaryButton}>
+                    <Text style={styles.primaryText}>Sign In / Sign Up</Text>
+                </Pressable>
+            )}
         </ScrollView>
     );
 }
@@ -183,7 +188,14 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             <Text style={styles.label}>Notes (optional)</Text>
             <TextInput accessibilityLabel="Visit notes" value={notes} onChangeText={setNotes} maxLength={4000} multiline editable={!saving} placeholder="A memory from this visit" placeholderTextColor="#79665E" style={[styles.input, formStyles.notes]} />
             <Text style={styles.label}>Save to groups</Text>
-            {!loading && loadError === "" && groups.length === 0 && <Text style={styles.message}>Create or join a group from Groups before saving a visit.</Text>}
+            {!loading && loadError === "" && groups.length === 0 && (
+                <>
+                    <Text style={styles.message}>Create or join a group from Groups before saving a visit.</Text>
+                    <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.push("/groups")} style={[styles.secondaryButton, saving && styles.disabled]}>
+                        <Text style={styles.secondaryText}>Create / Join a Group</Text>
+                    </Pressable>
+                </>
+            )}
             {groups.map(group => {
                 const selected = selectedGroups.includes(group.id);
                 return (

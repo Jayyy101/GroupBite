@@ -40,14 +40,14 @@ export default function SavedPlacesScreen() {
                 <Text style={styles.backButtonText}>Back</Text>
             </Pressable>
 
-            <Text style={styles.title}>Saved Places</Text>
+            <Text style={styles.title}>Saved Places (this device)</Text>
 
             {error !== "" && <Text style={styles.error}>{error}</Text>}
 
             {error === "" && places.length === 0 && (
                 <View style={styles.card}>
                     <Text style={styles.emptyMessage}>
-                        No saved places yet. Add a place to start your list!
+                        No previously saved Places on this device. New restaurant visits are saved to your groups.
                     </Text>
                 </View>
             )}

@@ -1,18 +1,22 @@
-import { getSavedPlaces, savePlace, updatePlace } from "@/utils/storage";
-import { useLocalSearchParams, useRouter } from "expo-router";
+import { getSavedPlaces, updatePlace } from "@/utils/storage";
+import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 export default function AddPlaceScreen() {
-    const router = useRouter();
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
-    const isEditing = id !== undefined;
+    if (id === undefined) return <Redirect href="/add-visit" />;
+    return <LegacyPlaceEditor key={JSON.stringify(id)} id={id} />;
+}
+
+function LegacyPlaceEditor({ id }: { id: string | string[] }) {
+    const router = useRouter();
     const [name, setName] = useState("");
     const [cuisine, setCuisine] = useState("");
     const [notes, setNotes] = useState("");
     const [rating, setRating] = useState<number | undefined>();
     const [wouldGoAgain, setWouldGoAgain] = useState<boolean | undefined>();
     const [error, setError] = useState("");
-    const [loading, setLoading] = useState(isEditing);
+    const [loading, setLoading] = useState(true);
     const [loadError, setLoadError] = useState("");
     const [saving, setSaving] = useState(false);
 
@@ -20,10 +24,6 @@ export default function AddPlaceScreen() {
         let active = true;
 
         async function loadPlace() {
-            if (!isEditing) {
-                return;
-            }
-
             setLoading(true);
             setLoadError("");
             if (typeof id !== "string" || id.trim() === "") {
@@ -59,10 +59,10 @@ export default function AddPlaceScreen() {
         return () => {
             active = false;
         };
-    }, [id, isEditing]);
+    }, [id]);
 
     async function handleSave() {
-        if (loading || loadError !== "" || saving) return;
+        if (typeof id !== "string" || loading || loadError !== "" || saving) return;
 
         if (name.trim() === "") {
             setError("Please enter a place name.");
@@ -73,18 +73,14 @@ export default function AddPlaceScreen() {
         setSaving(true);
         try {
             const place = {
-                id: typeof id === "string" ? id : Date.now().toString(),
+                id,
                 name: name.trim(),
                 cuisine: cuisine.trim(),
                 notes: notes.trim(),
                 rating,
                 wouldGoAgain,
             };
-            if (isEditing) {
-                await updatePlace(place);
-            } else {
-                await savePlace(place);
-            }
+            await updatePlace(place);
         } catch (error) {
             console.error("Failed to save place:", error);
             setError("Could not save the place. Please try again.");
@@ -93,11 +89,7 @@ export default function AddPlaceScreen() {
             setSaving(false);
         }
 
-        if (isEditing && typeof id === "string") {
-            router.dismissTo({ pathname: "/place/[id]", params: { id } });
-        } else {
-            router.replace("/saved-places");
-        }
+        router.dismissTo({ pathname: "/place/[id]", params: { id } });
     }
 
     return (
@@ -121,7 +113,7 @@ export default function AddPlaceScreen() {
                 <Text style={styles.backButtonText}>Back</Text>
             </Pressable>
 
-            <Text style={styles.title}>{isEditing ? "Edit Place" : "Add a Place"}</Text>
+            <Text style={styles.title}>Edit Place</Text>
 
             {loading ? (
                 <Text style={styles.choiceHint}>Loading place...</Text>
@@ -199,7 +191,7 @@ export default function AddPlaceScreen() {
                         style={styles.saveButton}
                     >
                         <Text style={styles.saveButtonText}>
-                            {saving ? "Saving..." : isEditing ? "Save Changes" : "Save Place"}
+                            {saving ? "Saving..." : "Save Changes"}
                         </Text>
                     </Pressable>
                 </View>

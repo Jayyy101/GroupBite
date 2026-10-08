@@ -14,10 +14,10 @@ export default function Index() {
 
       <Pressable
         accessibilityRole="button"
-        onPress={() => router.push("/add-place")}
+        onPress={() => router.push("/add-visit")}
         style={styles.primaryButton}
       >
-        <Text style={styles.primaryButtonText}>Add a Place</Text>
+        <Text style={styles.primaryButtonText}>Add Restaurant / Visit</Text>
       </Pressable>
 
       <Pressable
@@ -25,13 +25,13 @@ export default function Index() {
         onPress={() => router.push("/saved-places")}
         style={styles.secondaryButton}
       >
-        <Text style={styles.secondaryButtonText}>View Saved Places</Text>
+        <Text style={styles.secondaryButtonText}>Saved Places (this device)</Text>
       </Pressable>
 
       <View style={styles.emptyState}>
-        <Text style={styles.emptyStateTitle}>No saved places yet</Text>
+        <Text style={styles.emptyStateTitle}>Your restaurants and visits</Text>
         <Text style={styles.emptyStateText}>
-          Your favorite restaurants will appear here after you add them.
+          New restaurant visits are saved to your groups. Previously saved Places remain on this device.
         </Text>
       </View>
 
