@@ -191,7 +191,7 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             {!loading && loadError === "" && groups.length === 0 && (
                 <>
                     <Text style={styles.message}>Create or join a group from Groups before saving a visit.</Text>
-                    <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.push("/groups")} style={[styles.secondaryButton, saving && styles.disabled]}>
+                    <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, saving && styles.disabled]}>
                         <Text style={styles.secondaryText}>Create / Join a Group</Text>
                     </Pressable>
                 </>

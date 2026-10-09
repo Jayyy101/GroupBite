@@ -47,7 +47,7 @@ export default function SavedPlacesScreen() {
             {error === "" && places.length === 0 && (
                 <View style={styles.card}>
                     <Text style={styles.emptyMessage}>
-                        No previously saved Places on this device. New restaurant visits are saved to your groups.
+                        No previously saved Places on this device. Restaurant visits are saved to your groups; My Places saves private memories to your account.
                     </Text>
                 </View>
             )}

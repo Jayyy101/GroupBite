@@ -22,6 +22,14 @@ export default function Index() {
 
       <Pressable
         accessibilityRole="button"
+        onPress={() => router.push("/my-places")}
+        style={styles.secondaryButton}
+      >
+        <Text style={styles.secondaryButtonText}>My Places</Text>
+      </Pressable>
+
+      <Pressable
+        accessibilityRole="button"
         onPress={() => router.push("/saved-places")}
         style={styles.secondaryButton}
       >
@@ -31,7 +39,7 @@ export default function Index() {
       <View style={styles.emptyState}>
         <Text style={styles.emptyStateTitle}>Your restaurants and visits</Text>
         <Text style={styles.emptyStateText}>
-          New restaurant visits are saved to your groups. Previously saved Places remain on this device.
+          Restaurant visits are saved to your groups. My Places saves private memories to your account. Previously saved Places remain on this device.
         </Text>
       </View>
 

@@ -66,6 +66,25 @@ export type Restaurant = {
     updated_at: string;
 };
 
+export type PersonalPlaceFields = {
+    name: string;
+    address: string;
+    cuisine: string | null;
+    visited_on: string | null;
+    rating: number | null;
+    would_go_again: boolean | null;
+    notes: string | null;
+};
+
+export type PersonalPlace = PersonalPlaceFields & {
+    id: string;
+    owner_user_id: string;
+    client_request_id: string;
+    created_at: string;
+    updated_at: string;
+    revision: number;
+};
+
 export type GroupRestaurant = {
     id: string;
     group_id: string;
@@ -131,6 +150,12 @@ export type SaveVisitArgs = {
 export type Database = {
     public: {
         Tables: {
+            personal_places: {
+                Row: PersonalPlace;
+                Insert: PersonalPlaceFields & { client_request_id: string };
+                Update: Partial<PersonalPlaceFields>;
+                Relationships: [];
+            };
             profiles: {
                 Row: Profile;
                 Insert: { id: string; display_name: string; created_at?: string };
