@@ -32,7 +32,13 @@ yarn-error.*
 
 # local env files
 .env
+.env.*
 .env*.local
+!.env.example
+
+# generated Supabase CLI metadata
+/supabase/.temp/
+/supabase/.branches/
 
 # typescript
 *.tsbuildinfo

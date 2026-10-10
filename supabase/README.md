@@ -1,5 +1,11 @@
 # Milestone 8 setup
 
+Milestone 15 now includes a **local-only** authenticated Geoapify suggestion
+function. Its [contract, server secrets, validation and later deployment steps](functions/geoapify-suggest/README.md)
+are documented separately. The mobile UI still uses mock suggestions; saves,
+date fields, coordinate attachment and migrations 1–9 are unchanged. Additive
+Migration 10 introduces only service-role committed-admission confirmation.
+
 1. Keep the real `.env` local. `.env.example` lists the two required variables with blank values. Use the project's **publishable** key, never a secret or service-role key.
 2. In the Supabase project dashboard, open **SQL Editor → New query**. Paste the complete contents of `migrations/20261004000100_backend_foundation.sql` and click **Run** once. This versioned migration is a transaction; it creates only profiles, groups, memberships, and their supporting policies/functions/trigger. If you already applied it, do not run it again.
 3. Under **Authentication → Sign In / Providers → Email**, enable email/password sign-in and allow new registrations. Keep **Confirm email** enabled if you want verification. The form tells users to verify and then sign in; it also works when confirmation is disabled and Supabase returns an immediate session.
@@ -176,3 +182,147 @@ Manual device/web checks after separately authorized backend deployment:
 - Exercise slow/offline saves, double taps, missing saved results, and a response arriving after switching accounts/backgrounding. Confirm **Check Saved Result** only reads; a stale edit/delete requires refreshed state and another user action. Do not assume a missing result means the original save failed.
 - Verify drafts/confirmations disappear on blur/background, deep-link Back fallbacks work, and long forms scroll with the keyboard on iOS/Android/web. Sign-in currently retains the existing Groups destination; return Home for My Places.
 - Smoke-test existing single/multi-group saves/retries, Visit editing/deletion, membership controls, auth, and legacy device-local list/edit/delete. Verify legacy storage bytes survive personal saving and auth changes.
+
+## Milestone 15 Phase 2: Saved Map / Nearby groundwork
+
+Migration 8 (`migrations/20261009000800_saved_locations.sql`) has been deployed and hosted verification passed, as reported by the project owner. It follows migrations 1–7, without modifying or rerunning those migrations. No app screens, existing RPC signatures, table columns, RLS policies, or grants change. No external API, geocoding job, location permission, secret, or paid service is introduced.
+
+The migration enables PostGIS in `extensions`. If PostGIS already exists in another schema, it aborts transactionally instead of moving it. Before deployment, an operator must check that schema and extension availability; do not silently relocate an existing extension used by other applications.
+
+### Geographic storage and privacy
+
+`group_restaurant_locations` stores one nullable resolution record per saved group entry, keyed by `group_restaurants.id` with `ON DELETE CASCADE`; `personal_place_locations` stores one per private Personal Place. Both have paired nullable latitude/longitude, a generated WGS84 geography point, a GiST spatial index, an address snapshot, standardized address, provider/result ID, accuracy, status, and resolution timestamp. Resolved records require complete metadata and building/address-level accuracy. Failed/ambiguous/unresolved records cannot carry coordinates. Finite coordinate bounds are enforced; a real `(0,0)` is valid and is never used as a missing-value sentinel.
+
+The globally readable `restaurants` catalog is deliberately unchanged: adding geographic columns there would expose unrelated locations via existing authenticated `SELECT *` reads. Group location RLS requires current membership in the group of that exact GroupRestaurant entry. Reusing the same globally readable Restaurant ID in another group never grants access to the first group's coordinates, standardized address, status, or provider metadata. Resolution is independent per entry; there is no cross-group copy or fallback. Personal location RLS requires ownership of the referenced Personal Place. Direct geographic writes are denied to clients, including Group Owners, and to `service_role`; the trusted writer uses only the scoped attachment functions below.
+
+Existing records are not backfilled, deleted, or standardized. A missing location row represents unresolved/null coordinates. Address edits invalidate location metadata in the same transaction; a privileged shared Restaurant address correction clears all referencing entries' location rows. Personal Places retain their original trimming, timestamp and revision trigger. Standardized addresses are metadata and do not replace the exact name/address Restaurant reuse key.
+
+### Saved-location read contract
+
+`get_saved_locations(scope, target_group_id, center_latitude, center_longitude, radius_meters, page_size, page_offset)` is authenticated-only and derives identity from `auth.uid()`. Its `SECURITY DEFINER` query explicitly scopes both branches to the caller; it does not enumerate the global Restaurant catalog.
+
+- `scope`: `all` (default), `personal`, or `group`. Only `group` accepts/requires `target_group_id`, which must have current membership. Owners get no membership bypass.
+- The center is optional but must supply both coordinates. A radius requires a center and is an inclusive, straight-line/geodesic distance in meters, bounded to 0–100,000. GPS and manually chosen centers use the same contract. The center is not persisted.
+- Without a radius, unresolved records remain listed with null coordinates/distance. With a radius, they are excluded. Known coordinates with a center but no radius receive a distance without restricting results.
+- Pages default to 200 rows, cap at 1,000, and allow offsets from 0–100,000. Ordering is distance (when a center exists), then kind/record ID. Offset pagination is deterministic for an unchanged dataset, not a cross-request snapshot under concurrent edits.
+- A personal row has `saved_kind='personal'`, its Personal Place ID, `personal_rating`, and null group fields/aggregates. A group row has `saved_kind='group'`, its GroupRestaurant ID, Restaurant ID, group ID/name, and that entry's `group_average_rating`, rated count, and total Visit count. There are no notes, user identities, unrelated group summaries, or combined personal/group ratings.
+- The same Restaurant in two accessible groups returns two rows with distinct navigation targets, scoped ratings, and independent coordinates/status. A future UI may combine matching resolved points with a group chooser, but must not deduplicate solely by Restaurant ID or substitute one group's location for another unresolved entry. Personal records are never merged into global Restaurants.
+
+### Future trusted coordinate attachment
+
+`attach_verified_restaurant_location(acting_user_id, target_group_id, target_restaurant_id, target_group_restaurant_id, expected_address, verified_latitude, verified_longitude, provider_name, provider_result_id, formatted_address, accuracy)` is callable only by `service_role`. It locks the group, rechecks current membership, then locks the Restaurant and exact saved entry in the existing compatible order. The entry must match the supplied group and Restaurant IDs, and the address snapshot must match exactly. It fills that entry's absent/unresolved location and returns `true`; an already-resolved entry returns `false` without being overwritten. Other groups resolve independently, even when the Restaurant ID matches. It works when a new unchanged `save_restaurant_visit` call reuses an existing Restaurant ID. It does not modify facts, Visits, receipts, or addresses. Final-Visit deletion cascades that entry's location metadata while retaining the global Restaurant and save receipts. A new save creates a new entry ID, initially unresolved. Delayed attachment calls with the old entry ID fail; the trusted backend must target the new entry using a freshly verified result. For a save selecting multiple groups, the backend may attach that verified result independently to each selected, authorized entry, never by copying another group's stored resolution.
+
+`attach_verified_personal_place_location(acting_user_id, target_personal_place_id, expected_revision, expected_address, verified_latitude, verified_longitude, provider_name, provider_result_id, formatted_address, accuracy)` is also backend-only. It locks the owner's Place, checks revision/address, and fills unresolved metadata. A successful attachment increments the existing revision, so stale edits/deletes cannot race past enrichment. Retries must refresh the revision; resolved locations are not overwritten. Deleting the Personal Place cascades its metadata.
+
+**SQL does not verify an external provider response.** The future autocomplete backend must authenticate the user, derive `acting_user_id` from the verified session, verify the selected provider result and address/coordinate association, then call the attachment function. Never grant these functions to `authenticated`, trust client-supplied coordinates/provider labels, or send a service-role secret to the app. Provider integration, save-first attachment orchestration, failed-resolution recording RPCs, and corrections to already-resolved entry locations remain later work. Existing saves remain usable if enrichment fails; do not automatically replay a save to retry enrichment.
+
+### Disposable local validation
+
+`tests/validate_saved_locations.mjs` requires explicitly supplied PostgreSQL/PostGIS binaries and an installed `pg` module. It clears inherited configuration, snapshots/hashes explicit SQL/test inputs, initializes a unique database directory under `/private/tmp`, binds only to loopback on a random high port, and uses synthetic authentication/accounts. It never reads app configuration or `.env`, connects to a supplied database URL, or touches an existing database. It verifies the PostGIS schema guard, applies migration 8 over populated historical data, and compares all historical rows and old function definitions/ACLs, policies and table/column grants before and after. Both new location tables must remain empty after migration.
+
+Example using the approved temporary tooling (paths are local validation tooling, not app dependencies):
+
+```sh
+node supabase/tests/validate_saved_locations.mjs \
+  --postgres-bin /private/tmp/groupbite-m15-tooling/Postgres.app/Contents/Versions/17/bin \
+  --pg-module /private/tmp/groupbite-m10-validation/node_modules/pg/lib/index.js
+```
+
+The runner executes all eight transactional SQL suites, the three original save/retry/global-reuse races, and the existing Visit/membership/personal concurrency suites. `tests/saved_locations.sql` covers the cross-group Restaurant reuse attack through direct RLS and all/group/radius queries, independently resolved coordinates/provenance and ratings, membership departure/removal, ownership transfer/re-admission, trusted entry/group/Restaurant checks, unknown/failed coordinates, radius boundaries, input validation, final/nonfinal Visit deletion, receipt retries, deletion/recreation, stale attachments, and all-entry address invalidation. `tests/saved_locations_concurrency.mjs` adds seventeen actual lock-wait cases for independent group and competing same-entry resolutions, attachment versus departure/removal, final-Visit deletion/recreation, shared address invalidation in both orders, personal edit/delete/revision races, and rollback. Cleanup stops only the server created by the runner and removes only its unique runtime directory, including on failure. Downloaded binaries remain in the tooling directory for reruns; no system service or shell initialization is installed.
+
+## Milestone 15 Phase 3: local autocomplete backend groundwork
+
+Migration 9 (`migrations/20261009000900_address_autocomplete_groundwork.sql`) is local and **not deployed**. Apply it once after migrations 1–8 only after separately authorized deployment. It adds two private tables and three RPCs; all existing save signatures, receipts, Restaurant reuse, location attachment functions, policies, grants and app screens remain unchanged. PostgreSQL adds internal foreign-key triggers to the original receipt table for the new bindings. No old receipts or addresses are backfilled, and no provider call, API key, dependency, Edge Function or UI is introduced.
+
+### Exact group-entry bindings
+
+`save_restaurant_visit_with_location_bindings` accepts the same nine parameter names/defaults as `save_restaurant_visit` and returns one row `{ restaurant_id, bindings_recorded }`. It is authenticated-only and derives the actor from `auth.uid()`. It locks the distinct selected groups in sorted order, checks current membership in every group, then checks whether the caller's original receipt exists in a separate statement. It calls the unchanged save RPC, preserving its input normalization, payload fingerprint, permissions, all-or-nothing multi-group save and idempotency behavior.
+
+For a genuinely new receipt, the same transaction inserts one `visit_save_location_bindings` row per selected group with the exact `group_restaurants.id`. A binding failure rolls the whole save back. For an existing receipt, the wrapper never inserts or infers bindings, including when a legacy save committed while it waited for a group lock. The original API remains available to current screens; their receipts intentionally remain unbound. A concurrent mismatched request fails through the existing payload check, including when the selected groups do not overlap.
+
+Bindings are keyed by `(user_id, request_id, group_id)` and contain only the historical entry UUID. They reference the original `(user_id, request_id)` receipt with cascade on privileged receipt deletion. There is deliberately no FK to groups or entries: deleting a final Visit or group must preserve the historical identity without blocking deletion. No client or service-role direct table access is granted, no client RLS policies exist, and a trigger rejects updates even by a privileged writer. The wrapper only inserts; there is no upsert, rebinding, or public cleanup endpoint. Existing privileged receipt purging can cascade bindings; ordinary saves retain receipts as before.
+
+`bindings_recorded` means immutable historical bindings exist; it does **not** mean every entry still exists, every membership remains active, or coordinates are attached. A legacy receipt returns `false`; do not retry it under a new ID to obtain targets, since that would create another Visit.
+
+`get_visit_save_location_targets(client_request_id)` is authenticated-only. It returns `{ group_id, restaurant_id, group_restaurant_id, address }` only for the caller's bindings that still match the original receipt's Restaurant, exact current entry, and current membership. The address is the current Restaurant address, not a verification token or stored provider result. It accepts no actor/group/entry override. It returns no row for a legacy receipt, foreign request, deleted group/entry, or revoked membership. One deleted/revoked group leaves the other targets available. Deletion/recreation never retargets an old receipt to the replacement entry. Rejoining can restore access only to an original entry that still exists.
+
+Both tables have RLS enabled and no table grants to `anon`, `authenticated` or `service_role`. The three security-definer RPCs have empty search paths and explicit execute grants. The binding reader is a scoped snapshot, not a lock or authorization lease: migration 8's attachment RPC must recheck membership, exact identity and expected address at write time.
+
+### Durable provider admission
+
+`reserve_geoapify_request(acting_user_id)` is service-role-only and returns one row:
+
+- Admission: `{ admitted: true, admission_id, permit_expires_at, reason: 'admitted', retry_after_seconds: 0 }`.
+- Denial: `{ admitted: false, admission_id: null, permit_expires_at: null, reason, retry_after_seconds }`. Reasons are `global_daily_limit`, `user_daily_limit`, or `global_rate_limit`.
+
+The future Edge Function must verify the user's token and derive `acting_user_id` from that identity. The RPC checks that a profile exists, but does not itself authenticate a service-supplied actor. Clients cannot select limits, timestamps, refund events, or invoke the limiter. An unknown/deleted actor is denied. Reservations have no profile FK so account deletion cannot refund global usage.
+
+Every admission is a private timestamped ledger event. A dedicated transaction advisory lock `(714015, 9)` serializes admission, with wall clock captured **after** the lock and fresh count statements. Fixed limits are 1,000 global and 100 per user over a rolling 24 hours, conservatively extended by the one-second dispatch grace. Events count while `permit_expires_at > checked_at - interval '24 hours'`; the exact cutoff is expired. This uses elapsed hours, not a calendar-day reset. Cleanup removes only expired events during admission calls. A bounded ledger is sufficient at this scale; no scheduled task, queue or external rate-limit service is needed.
+
+The rate gate permits at most three admissions over a rolling two seconds. Each permit expires one second after admission. Accounting for that grace prevents delayed starts from turning three admissions per second into a six-request burst. With timely dispatch, at most three HTTP starts fit in any rolling second. Database admission cannot guarantee arrival spacing at the provider across network delays; future integration must also stop/back off on provider throttling. Limits apply project-wide to every provider request routed through this ledger, including autocomplete, selected-result verification and explicit retries.
+
+Both the wrapper and limiter require **READ COMMITTED** and reject REPEATABLE READ/SERIALIZABLE with SQLSTATE `25001`; their post-lock checks depend on fresh statement snapshots. The limiter holds a transaction-scoped lock only through database commit. Do not combine it with save/attachment transactions or hold it during HTTP.
+
+### Required future Edge Function contract
+
+1. Authenticate the user; use their JWT for the save wrapper and binding reader. Preserve the save request ID and original payload for retries. Keep service-role credentials and the provider key exclusively on the backend.
+2. Obtain a committed admission response before **each** outbound HTTP attempt, including result verification and any retry. Do not send if admission is denied, uncertain, expired, or has insufficient time left for a conservatively checked dispatch. Account for response delay and clock uncertainty. Disable unmetered automatic HTTP retries. Each permitted attempt can consume provider credits even if it fails.
+3. Never refund reservations, including abandoned, failed, or timed-out calls. A transaction rollback creates no durable admission: therefore HTTP must never start before a successful committed RPC response. The database does not consume a permit a second time or dispatch HTTP; the trusted Edge implementation must use each returned permit at most once and abandon an uncertain result.
+4. Save first, then verify the selected provider result server-side at building/address precision. Use the caller's scoped binding reader to determine attachment targets. Do not trust client coordinates or caller-supplied group/entry/Restaurant IDs. Compare the verified selection/address with the saved/current address before passing `expected_address`; edited addresses require a fresh selection/verification.
+5. Attach independently to each returned exact entry through migration 8's service-only RPC. Keep saves if verification/attachment fails. Retry enrichment by rereading the original bindings and obtaining new provider admission if another HTTP request is needed; never replay a new save merely to retry coordinates. A deleted/recreated entry is unavailable to the old request. An already-resolved entry is not overwritten. Personal Places continue using the existing owner/revision/address attachment contract without group bindings.
+
+The save plus bindings are atomic; external provider requests and per-entry attachments are separate transactions. Partial attachment success is expected and must be surfaced/reconciled without undoing memories. A successful SQL admission alone does not enforce provider account billing settings, requests made outside this integration, or credits per endpoint. Configure the future free account without paid enrollment/automatic upgrades, keep the key private, and ensure every attempted request is metered. No external billing configuration is performed by this migration.
+
+### Local validation
+
+```sh
+node supabase/tests/validate_address_autocomplete_groundwork.mjs \
+  --postgres-bin /private/tmp/groupbite-m15-tooling/Postgres.app/Contents/Versions/17/bin \
+  --pg-module /private/tmp/groupbite-m10-validation/node_modules/pg/lib/index.js
+```
+
+This separate validator preserves the phase-2 runner unchanged. It uses the same isolated loopback/SCRAM tooling, synthetic accounts and runtime cleanup, with no `.env`, hosted connection, installed dependency or existing database. It applies migration 9 over populated migration 8 location metadata and snapshots old rows, columns, function definitions/ACLs, RLS/policies/grants, constraints, triggers and indexes. Only the two additive receipt FK triggers are permitted; new tables must start empty. It SHA-256-pins every migration/test input.
+
+All nine SQL suites and 85 overlapping-writer cases run: the 62 existing save/Visit/membership/personal/location cases plus 23 new binding/admission cases with verified database lock waits. New tests cover legacy receipts (including pre-migration data), actor-scoped request collisions, forged access, immutable targets, multi-group retries and partial failures, final-Visit deletion/recreation, owner/membership checks, both orderings of legacy/wrapped saves and membership/deletion races, disjoint-group receipt contention, rollback, exact rolling predicates and live cutoff/grace behavior, global/user last slots, burst admission, wall clock after lock waits, deleted-account usage retention, and rejection of stale-snapshot isolation. Existing offline personal/navigation, TypeScript and lint checks remain separate.
+
+Local tooling currently provides PostgreSQL 17.11 / PostGIS 3.5.6; the hosted PostGIS version reported by the owner is 3.3.7. Migration 9 introduces no PostGIS-specific SQL. Supabase JWT/PostgREST behavior, Edge authentication/permit dispatch, provider verification and live provider limits still require their later integration tests. Migration 9 has not been deployed or checked against hosted Supabase.
+
+## Milestone 15: controlled local function runtime verification
+
+The owner reported a hosted reservation probe with HTTP 200, no
+`Preference-Applied` header, and an independently verified committed row. The
+function now confirms every affirmative reservation in a second read-only
+PostgREST transaction using `confirm_geoapify_request`. Additive Migration 10
+(`migrations/20261010001000_geoapify_admission_confirmation.sql`) adds only this
+service-role RPC; its boolean result requires an exact ID/user/expiry match and
+an unexpired committed row. Existing table grants and migrations 1–9 are unchanged.
+No hosted migration or function deployment was performed by this work.
+
+Both RPCs and their complete bodies share the original 800 ms deadline. Missing
+or uncertain confirmation fails closed, including when the reservation response
+acknowledges a commit. There are no automatic retries, refunds, cached permits or
+changes to quota limits. Default PostgREST `commit` is supported without enabling
+transaction overrides. Each explicit new client invocation needs fresh admission.
+
+The [runtime runner](tests/validate_geoapify_runtime.mjs) uses a disposable
+Unix-socket PostgreSQL database, loopback PostgREST 13.0.7, mocked Auth and mocked
+Geoapify. Twenty native Deno tests cover both commit configurations, rollback,
+missing/stalled confirmation, the shared deadline, concurrent admission and
+retained usage after failure/retry. All nine existing SQL suites and 23 Migration 9
+lock-wait cases pass. New database tests prove uncommitted invisibility, committed
+visibility, identity/expiry matching, expired/rolled-back denial, service-only
+execution and unchanged table permissions. The runner also compares existing
+function definitions/ACLs, table ACLs/RLS and policies across Migration 10.
+
+Deno checking, strict TypeScript, the 29 offline function checks and existing
+save/privacy/navigation regressions pass. Lint has no errors; the generated
+`.expo/types/router.d.ts` retains an unused-disable warning. No real provider
+requests or credentials are used.
+
+See the [function README](functions/geoapify-suggest/README.md) for local commands
+and manual activation steps. Apply only Migration 10 through an approved workflow
+before using the updated function. Hosted readback permissions, actual Edge
+Runtime/Auth/gateway behavior and cold/warm latency within 800 ms still require
+verification with Geoapify disabled. Extra readback latency may safely abandon
+charged reservations; never extend the permit or weaken the quota guard to
+compensate.

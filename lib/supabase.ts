@@ -17,6 +17,9 @@ if (!publishableKey.startsWith("sb_publishable_")) {
     throw new Error("Supabase requires a publishable key (sb_publishable_). Never configure a secret or service-role key in this app.");
 }
 
+// Public mobile configuration only; never add backend/provider secrets here.
+export const supabasePublicConfig = Object.freeze({ url, publishableKey });
+
 export const supabase = createClient<Database>(url, publishableKey, {
     auth: {
         ...(Platform.OS !== "web" ? { storage: AsyncStorage, lock: processLock } : {}),

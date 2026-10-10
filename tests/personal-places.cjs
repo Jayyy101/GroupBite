@@ -22,7 +22,7 @@ function defer() { let resolve; const promise = new Promise(r => { resolve = r; 
 function runtime(options = {}) {
     const world = { auth: { loading: false, error: '', session: { user: { id: 'a' }, access_token: 'fake-a' } },
         focused: true, params: {}, rows: [], requests: [], navigation: [], listeners: new Set(), override: null,
-        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localWrites: 0, lateUpdates: 0 };
+        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [] };
     let nextId = 2;
     async function fetchOffline(input, init) {
         const url = new URL(input), method = init.method ?? 'GET', headers = new Headers(init.headers);
@@ -96,11 +96,13 @@ function runtime(options = {}) {
         canGoBack: () => world.canGoBack !== false, back: () => world.navigation.push('BACK') };
     const mocks = {
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { AppState: appState, Platform: { OS: 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
+        'react-native': { AppState: appState, Keyboard: { dismiss: () => world.keyboardDismissals++ },
+            Linking: { async openURL(url) { world.links.push(url); } }, Platform: { OS: options.platform ?? 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
         'expo-router': { Redirect: 'Redirect', useRouter: () => router, useLocalSearchParams: () => world.params,
             useFocusEffect: cb => react.useEffect(() => world.focused ? cb() : undefined, [world.focused, cb]) },
         '@react-navigation/native': { useIsFocused: () => world.focused },
-        '@/lib/supabase': { supabase }, '@/providers/auth': { useAuth: () => world.auth },
+        '@/lib/supabase': { supabase, supabasePublicConfig: { url: 'https://abcdefghijklmnopqrst.supabase.co', publishableKey: 'sb_publishable_offline_test' } },
+        '@/providers/auth': { useAuth: () => world.auth },
         '@react-native-async-storage/async-storage': { default: { async getItem(key) { assert.equal(key, 'savedPlaces'); return world.local; },
             async setItem(key, value) { assert.equal(key, 'savedPlaces'); world.localWrites++; world.local = value; } } },
     };
@@ -114,7 +116,10 @@ function runtime(options = {}) {
         const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
         const module = { exports: {} }; cache[name] = module.exports;
         vm.runInNewContext(code, { exports: module.exports, module, require: name => name.startsWith('.') ? load('@/' + path.relative(root, path.resolve(path.dirname(file), name))) : load(name),
-            setInterval: () => 1, clearInterval: () => {}, Date, console });
+            setInterval: () => 1, clearInterval: () => {},
+            setTimeout: options.setTimeout ?? setTimeout, clearTimeout: options.clearTimeout ?? clearTimeout,
+            fetch: options.autocompleteFetch ?? (() => assert.fail('Unexpected unmocked autocomplete Fetch')),
+            AbortController, URL, Headers, Request, Response, __DEV__: options.development ?? false, Date, console });
         return module.exports;
     }
     function render(Screen) {
@@ -128,6 +133,7 @@ function runtime(options = {}) {
                     if (Array.isArray(element)) return element.map((x, i) => visit(x, route + '/' + (x?.key ?? i)));
                     if (typeof element !== 'object') return element;
                     if (typeof element.type === 'function') {
+                        options.observeComponent?.(element.type, element.props);
                         const key = route + ':' + element.type.name + ':' + (element.key ?? '');
                         const frame = frames.get(key) ?? { slots: [], alive: true, renderer };
                         frames.set(key, frame); frame.used = true; frame.cursor = 0;
@@ -333,12 +339,12 @@ if (require.main === module) (async () => {
             rt.switch(null, r); await r.settle(); assert(textOf(r.output).includes('Sign in')); assert(!textOf(r.output).includes('B Cafe')); assert.equal(rt.world.localWrites, 0); r.unmount();
         }
     });
-    await test('Blur and background clear private data/drafts/confirmations; foreground reloads', async () => {
+    await test('Blur/background hide private UI and clear confirmations; create text survives', async () => {
         for (const name of ['my-places', 'personal-place-form', 'personal-place/[id]']) {
             const rt = runtime(); rt.world.params = name === 'personal-place-form' ? {} : { id: placeId }; rt.world.rows = [fixture()]; const r = screen(rt, name); await r.settle();
             if (name === 'personal-place-form') await fill(r); if (name === 'personal-place/[id]') await click(r, 'Delete Personal Place');
             rt.emit('background'); await r.settle(); assert.equal(r.output, null); rt.emit('active'); await r.settle(); assert(!textOf(r.output).includes('Confirm Delete'));
-            if (name === 'personal-place-form') assert(nodes(r.output).filter(x => x.type === 'TextInput').every(x => x.props.value === ''));
+            if (name === 'personal-place-form') assert.equal(nodes(r.output).find(x => x.props?.accessibilityLabel === 'Restaurant name').props.value, ' New Cafe ');
             rt.world.focused = false; r.dirty = true; await r.settle(); assert.equal(r.output, null); rt.world.focused = true; r.dirty = true; await r.settle(); assert(r.output); r.unmount();
         }
     });
@@ -348,7 +354,7 @@ if (require.main === module) (async () => {
         const r = screen(rt, 'my-places'); await r.settle(); rt.switch('b', r); await r.settle(); held = false; delayed.resolve(response([fixture()])); await r.settle();
         assert(!textOf(r.output).includes('Private Cafe')); assert.equal(rt.world.lateUpdates, 0); r.unmount();
     });
-    await test('Late create/edit/delete responses after background cannot update state or navigate', async () => {
+    await test('Late create/edit/delete responses after background cannot update unmounted UI or navigate', async () => {
         for (const operation of ['POST', 'PATCH', 'DELETE']) {
             const rt = runtime(), delayed = defer(); rt.world.params = operation === 'POST' ? {} : { id: placeId }; rt.world.rows = [fixture()]; rt.world.override = call => call.method === operation ? delayed.promise : null;
             const r = screen(rt, operation === 'DELETE' ? 'personal-place/[id]' : 'personal-place-form'); await r.settle();

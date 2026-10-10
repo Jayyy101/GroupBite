@@ -1,5 +1,8 @@
+import { AddressAutocomplete } from "@/components/address-autocomplete";
+import type { AddressSuggestion } from "@/lib/address-search";
 import { isUuid, isVisitDate, restaurantErrorMessage } from "@/lib/restaurant-ui";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
+import { useAddressSearch } from "@/hooks/use-address-search";
 import { isGroupAccessDenied } from "@/lib/group-errors";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
@@ -35,8 +38,11 @@ export default function AddVisitScreen() {
 
 function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?: string }) {
     const router = useRouter();
+    const autocomplete = useAddressSearch();
     const [name, setName] = useState("");
     const [address, setAddress] = useState("");
+    // Kept separately from the unchanged save RPC payload; discarded on lifecycle resets.
+    const [addressSelection, setAddressSelection] = useState<AddressSuggestion | null>(null);
     const [cuisine, setCuisine] = useState("");
     const [visitedOn, setVisitedOn] = useState("");
     const [rating, setRating] = useState<number | null>(null);
@@ -52,6 +58,10 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
     const lastSubmission = useRef<{ payload: string; requestId: string } | null>(null);
     const isFocused = useIsFocused();
     const { version: foregroundVersion, isActive } = useForegroundRefresh();
+
+    useEffect(() => {
+        setAddressSelection(null);
+    }, [isFocused, isActive, foregroundVersion, refreshVersion]);
 
     useEffect(() => {
         setGroups([]);
@@ -151,7 +161,7 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
 
     const existingRestaurant = restaurantId !== undefined;
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
             <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.canGoBack() ? router.back() : router.replace("/groups")} style={[styles.secondaryButton, styles.backButton]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
@@ -162,7 +172,12 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             <Text style={styles.label}>Restaurant name</Text>
             <TextInput accessibilityLabel="Restaurant name" value={name} onChangeText={setName} maxLength={100} editable={!saving && !existingRestaurant} placeholder="Restaurant name" placeholderTextColor="#79665E" style={styles.input} />
             <Text style={styles.label}>Address</Text>
-            <TextInput accessibilityLabel="Restaurant address" value={address} onChangeText={setAddress} maxLength={300} editable={!saving && !existingRestaurant} placeholder="Full address, including city" placeholderTextColor="#79665E" style={styles.input} />
+            {existingRestaurant ? <TextInput accessibilityLabel="Restaurant address" value={address} maxLength={300} editable={false} placeholder="Full address, including city" placeholderTextColor="#79665E" style={styles.input} /> :
+                <AddressAutocomplete {...autocomplete} value={address} selection={addressSelection} editable={!saving}
+                    active={isFocused && isActive && !loading && loadError === ""}
+                    resetKey={`${refreshVersion}:${foregroundVersion}`} onChange={(next, selection) => {
+                        setAddress(next); setAddressSelection(selection);
+                    }} />}
             <Text style={styles.label}>Cuisine (optional)</Text>
             <TextInput accessibilityLabel="Cuisine" value={cuisine} onChangeText={setCuisine} maxLength={100} editable={!saving && !existingRestaurant} placeholder="Cuisine" placeholderTextColor="#79665E" style={styles.input} />
             <Text style={styles.message}>{existingRestaurant ? "These shared facts stay unchanged when you add a visit." : "An exact name and address match reuses existing facts. Different locations stay separate."}</Text>
