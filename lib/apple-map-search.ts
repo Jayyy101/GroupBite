@@ -13,9 +13,21 @@ export function appleSearchErrorMessage(error: unknown): string {
     return error instanceof AppleSearchError ? error.message : UNAVAILABLE;
 }
 export const appleSearchAvailable = () => getMapKitSearchModule() !== null;
+function supportsPlaceIdLookup(native: MapKitSearchModule): boolean {
+    try {
+        return typeof native.lookupPlace === "function" && typeof native.supportsPlaceIdLookup === "function" && native.supportsPlaceIdLookup() === true;
+    } catch { return false; }
+}
+export function applePlaceIdLookupAvailable(): boolean {
+    const native = getMapKitSearchModule();
+    return native !== null && supportsPlaceIdLookup(native);
+}
 const text = (value: unknown, limit: number, empty = false): value is string => typeof value === "string" &&
     (empty || value.trim().length > 0) && Array.from(value).length <= limit && !/[\u0000-\u001f\u007f]/.test(value);
 const id = (value: unknown): value is string => typeof value === "string" && /^[0-9]{1,20}:[0-4]$/.test(value);
+// Opaque provider reference, distinct from the temporary request:index handle.
+// Never trim, truncate, change case or assume the format of Apple's example IDs.
+const placeId = (value: unknown): value is string => text(value, 300) && value === value.trim() && !/[\u007f-\u009f]/.test(value);
 const coordinate = (value: unknown, bound: number): value is number => typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= bound;
 function nativeError(error: unknown): AppleSearchError {
     const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
@@ -23,6 +35,7 @@ function nativeError(error: unknown): AppleSearchError {
     if (code === "ERR_CANCELLED") return new AppleSearchError("cancelled", "Apple search cancelled.");
     if (code === "ERR_INVALID") return new AppleSearchError("invalid", "Check the search text or select a current suggestion.");
     if (code === "ERR_DISABLED") return new AppleSearchError("unavailable", "Apple search requires the local iOS debug build.");
+    if (code === "ERR_UNSUPPORTED") return new AppleSearchError("unavailable", "Place ID lookup requires iOS 18 or later and an updated local debug build.");
     return new AppleSearchError("unavailable", UNAVAILABLE);
 }
 function validateQuery(query: string, mode: AppleSearchMode): string {
@@ -81,15 +94,30 @@ export async function searchApplePlaces(query: string, mode: AppleSearchMode, si
     return locations(result);
 }
 
+export async function lookupApplePlace(placeIdentifier: string, mode: AppleSearchMode, signal: AbortSignal): Promise<AppleSearchLocation[]> {
+    if (!placeId(placeIdentifier) || !["business", "address"].includes(mode)) {
+        throw new AppleSearchError("invalid", "Select a location with a valid Apple Place ID.");
+    }
+    const result = await operation((native, requestId) => {
+        if (!supportsPlaceIdLookup(native)) throw { code: "ERR_UNSUPPORTED" };
+        return native.lookupPlace!(placeIdentifier, mode, requestId);
+    }, signal);
+    if (!Array.isArray(result) || result.length > 1) throw new AppleSearchError("unavailable", UNAVAILABLE);
+    return locations(result);
+}
+
 function locations(result: unknown): AppleSearchLocation[] {
     if (!Array.isArray(result) || result.length > 5) throw new AppleSearchError("unavailable", UNAVAILABLE);
     const seen = new Set<string>();
     return result.map(row => {
         if (!row || !id(row.id) || seen.has(row.id) || !text(row.name, 200) || !text(row.address, 500) || row.source !== "apple-maps-preview" ||
             !["business", "address"].includes(row.kind) || !coordinate(row.latitude, 90) || !coordinate(row.longitude, 180) ||
-            (row.latitude === 0 && row.longitude === 0)) throw new AppleSearchError("unavailable", UNAVAILABLE);
+            (row.latitude === 0 && row.longitude === 0) || (row.placeId !== undefined && row.placeId !== null && !placeId(row.placeId))) {
+            throw new AppleSearchError("unavailable", UNAVAILABLE);
+        }
         seen.add(row.id);
-        return { id: row.id, name: row.name, address: row.address, latitude: row.latitude, longitude: row.longitude, source: row.source, kind: row.kind };
+        return { id: row.id, ...(typeof row.placeId === "string" ? { placeId: row.placeId } : {}),
+            name: row.name, address: row.address, latitude: row.latitude, longitude: row.longitude, source: row.source, kind: row.kind };
     });
 }
 

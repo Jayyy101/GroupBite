@@ -4,7 +4,7 @@ import { Platform } from "react-native";
 export type AppleSearchMode = "business" | "address";
 export type AppleSearchSuggestion = { id: string; title: string; subtitle: string };
 export type AppleSearchLocation = {
-    id: string; name: string; address: string; latitude: number; longitude: number;
+    id: string; placeId?: string; name: string; address: string; latitude: number; longitude: number;
     source: "apple-maps-preview"; kind: AppleSearchMode;
 };
 export type MapKitSearchModule = {
@@ -12,6 +12,9 @@ export type MapKitSearchModule = {
     complete(query: string, mode: AppleSearchMode, requestId: string): Promise<unknown>;
     search(query: string, mode: AppleSearchMode, requestId: string): Promise<unknown>;
     resolve(suggestionId: string, requestId: string): Promise<unknown>;
+    // Optional so an existing debug binary can still complete/search/resolve.
+    supportsPlaceIdLookup?(): boolean;
+    lookupPlace?(placeId: string, mode: AppleSearchMode, requestId: string): Promise<unknown>;
     cancel(requestId: string): Promise<void>;
     reset(): Promise<void>;
 };

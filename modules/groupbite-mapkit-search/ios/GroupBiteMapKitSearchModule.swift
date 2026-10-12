@@ -14,6 +14,12 @@ public final class GroupBiteMapKitSearchModule: Module {
       return false
       #endif
     }
+    Function("supportsPlaceIdLookup") { () -> Bool in
+      #if DEBUG
+      if #available(iOS 18.0, *) { return true }
+      #endif
+      return false
+    }
     AsyncFunction("complete") { (query: String, mode: String, requestId: String, promise: Promise) in
       #if DEBUG
       self.session.complete(query: query, mode: mode, requestId: requestId, promise: promise)
@@ -35,6 +41,13 @@ public final class GroupBiteMapKitSearchModule: Module {
       promise.reject("ERR_DISABLED", "Apple search preview is disabled.")
       #endif
     }.runOnQueue(.main)
+    AsyncFunction("lookupPlace") { (placeId: String, mode: String, requestId: String, promise: Promise) in
+      #if DEBUG
+      self.session.lookupPlace(placeId: placeId, mode: mode, requestId: requestId, promise: promise)
+      #else
+      promise.reject("ERR_DISABLED", "Apple search preview is disabled.")
+      #endif
+    }.runOnQueue(.main)
     AsyncFunction("cancel") { (requestId: String) in self.session.cancel(requestId: requestId) }.runOnQueue(.main)
     AsyncFunction("reset") { self.session.reset() }.runOnQueue(.main)
     OnAppEntersBackground { DispatchQueue.main.async { self.session.reset() } }
@@ -42,7 +55,8 @@ public final class GroupBiteMapKitSearchModule: Module {
   }
 }
 
-// Only cached native completion objects may be resolved. No client coordinates,
+// Suggestions resolve only cached native completions; Place IDs use MapKit lookup.
+// No client coordinates,
 // URLs, keys, persistence, location permissions or payload/exception logging.
 private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegate {
   private var completer: MKLocalSearchCompleter?
@@ -53,6 +67,11 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
   private var search: MKLocalSearch?
   private var searchId: String?
   private var searchPromise: Promise?
+  // Avoid storing an iOS-18-only type on a session supporting older iOS versions.
+  private var cancelLookup: (() -> Void)?
+  private var lookupId: String?
+  private var lookupToken: UUID?
+  private var lookupPromise: Promise?
   private var timeout: DispatchWorkItem?
   // A region hint, not a claim that all results are in Fremont. No device GPS.
   private let region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 37.5555, longitude: -121.9830),
@@ -60,6 +79,10 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
 
   private func validId(_ id: String) -> Bool {
     !id.isEmpty && id.count <= 20 && id.allSatisfy { $0.isASCII && $0.isNumber }
+  }
+  private func validPlaceId(_ id: String) -> Bool {
+    !id.isEmpty && id.unicodeScalars.count <= 300 && id == id.trimmingCharacters(in: .whitespacesAndNewlines) &&
+      !id.unicodeScalars.contains(where: { CharacterSet.controlCharacters.contains($0) })
   }
   private func display(_ value: String, limit: Int) -> String {
     String(value.components(separatedBy: .controlCharacters).joined(separator: " ")
@@ -116,7 +139,7 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
     reset(code: "ERR_UNAVAILABLE") // Never reflect the platform's raw error.
   }
   func resolve(suggestionId: String, requestId: String, promise: Promise) {
-    guard validId(requestId), let completion = completions[suggestionId], searchPromise == nil else {
+    guard validId(requestId), let completion = completions[suggestionId], searchPromise == nil, lookupPromise == nil else {
       promise.reject("ERR_INVALID", "Select a current suggestion."); return
     }
     let request = MKLocalSearch.Request(completion: completion)
@@ -155,33 +178,81 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
       }
       var locations: [[String: Any]] = []
       for (index, item) in response.mapItems.prefix(5).enumerated() {
-        let coordinate = item.placemark.coordinate
-        guard CLLocationCoordinate2DIsValid(coordinate), coordinate.latitude.isFinite, coordinate.longitude.isFinite,
-          !(coordinate.latitude == 0 && coordinate.longitude == 0) else { continue }
-        let postalAddress = item.placemark.postalAddress.map {
-          CNPostalAddressFormatter.string(from: $0, style: .mailingAddress)
-            .components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: ", ")
+        if let location = self.location(item, id: "\(requestId):\(index)", mode: mode, fallbackName: fallbackName) {
+          locations.append(location)
         }
-        let name = self.display(item.name ?? fallbackName, limit: 200)
-        let address = self.display(postalAddress ?? item.placemark.title ?? "", limit: 500)
-        guard !name.isEmpty, !address.isEmpty else { continue }
-        locations.append(["id": "\(requestId):\(index)", "name": name, "address": address,
-          "latitude": coordinate.latitude, "longitude": coordinate.longitude,
-          "source": "apple-maps-preview", "kind": mode])
       }
       promise.resolve(locations) // Multiple matches remain selectable; never guess the first.
     }
   }
+  private func location(_ item: MKMapItem, id: String, mode: String, fallbackName: String = "") -> [String: Any]? {
+    let coordinate = item.placemark.coordinate
+    guard CLLocationCoordinate2DIsValid(coordinate), coordinate.latitude.isFinite, coordinate.longitude.isFinite,
+      !(coordinate.latitude == 0 && coordinate.longitude == 0) else { return nil }
+    let postalAddress = item.placemark.postalAddress.map {
+      CNPostalAddressFormatter.string(from: $0, style: .mailingAddress)
+        .components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: ", ")
+    }
+    let name = display(item.name ?? fallbackName, limit: 200)
+    let address = display(postalAddress ?? item.placemark.title ?? "", limit: 500)
+    guard !name.isEmpty, !address.isEmpty else { return nil }
+    var location: [String: Any] = ["id": id, "name": name, "address": address,
+      "latitude": coordinate.latitude, "longitude": coordinate.longitude,
+      "source": "apple-maps-preview", "kind": mode]
+    #if DEBUG
+    if #available(iOS 18.0, *), let placeId = item.identifier?.rawValue, validPlaceId(placeId) {
+      location["placeId"] = placeId
+    }
+    #endif
+    return location
+  }
+  // Explicit identifier lookup, without a search fallback or persistence.
+  func lookupPlace(placeId: String, mode: String, requestId: String, promise: Promise) {
+    guard validId(requestId), validPlaceId(placeId), ["business", "address"].contains(mode) else {
+      promise.reject("ERR_INVALID", "Select a valid Apple Place ID."); return
+    }
+    guard #available(iOS 18.0, *) else {
+      promise.reject("ERR_UNSUPPORTED", "Place ID lookup requires iOS 18 or later."); return
+    }
+    guard let identifier = MKMapItem.Identifier(rawValue: placeId) else {
+      promise.reject("ERR_INVALID", "Select a valid Apple Place ID."); return
+    }
+    reset()
+    let request = MKMapItemRequest(mapItemIdentifier: identifier), token = UUID()
+    lookupId = requestId; lookupToken = token; lookupPromise = promise
+    cancelLookup = { request.cancel() }
+    armTimeout()
+    request.getMapItem { [weak self] item, error in
+      guard let self, self.lookupToken == token, let promise = self.lookupPromise else { return }
+      self.timeout?.cancel(); self.timeout = nil
+      self.cancelLookup = nil; self.lookupId = nil; self.lookupToken = nil; self.lookupPromise = nil
+      if let mapError = error as? MKError, mapError.code == .placemarkNotFound {
+        promise.resolve([] as [[String: Any]]); return
+      }
+      guard error == nil else {
+        promise.reject("ERR_UNAVAILABLE", "Apple lookup is unavailable."); return
+      }
+      // Mode describes the originating search, not a new claim about accuracy.
+      if let item, let location = self.location(item, id: "\(requestId):0", mode: mode) {
+        promise.resolve([location])
+      } else { promise.resolve([] as [[String: Any]]) }
+    }
+  }
   func cancel(requestId: String) {
-    if requestId == completionId || requestId == searchId { reset() }
+    if requestId == completionId || requestId == searchId || requestId == lookupId { reset() }
   }
   func reset(code: String = "ERR_CANCELLED") {
     timeout?.cancel(); timeout = nil
     completer?.delegate = nil; completer?.cancel(); completer = nil
     search?.cancel(); search = nil
+    // Clear the token before cancelling, including synchronously delivered callbacks.
+    lookupToken = nil
+    cancelLookup?(); cancelLookup = nil
     completionPromise?.reject(code, "Apple search stopped.")
     searchPromise?.reject(code, "Apple search stopped.")
+    lookupPromise?.reject(code, "Apple lookup stopped.")
     completionPromise = nil; searchPromise = nil; completionId = nil; searchId = nil
+    lookupPromise = nil; lookupId = nil
     completions.removeAll()
   }
 }

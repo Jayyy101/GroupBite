@@ -1,6 +1,6 @@
 import DevMapKitPreview from "@/components/dev-mapkit-preview";
 import { PersonalAccess } from "@/components/personal-access";
-import { appleSearchAvailable, appleSearchErrorMessage, CHIPOTLE_COMPARISON_ID, CHIPOTLE_SEARCH, completeAppleSearch,
+import { applePlaceIdLookupAvailable, appleSearchAvailable, appleSearchErrorMessage, CHIPOTLE_COMPARISON_ID, CHIPOTLE_SEARCH, completeAppleSearch, lookupApplePlace,
     pinDistanceMeters, resetAppleSearch, resolveAppleSuggestion, searchApplePlaces, type AppleSearchLocation, type AppleSearchMode,
     type AppleSearchSuggestion } from "@/lib/apple-map-search";
 import { listPersonalMapPins, personalMapErrorMessage, type PersonalMapPin } from "@/lib/personal-map";
@@ -18,6 +18,7 @@ export default function DevAppleSearchScreen() {
 function SearchPreview({ userId }: { userId: string }) {
     const router = useRouter();
     const [available] = useState(appleSearchAvailable);
+    const [lookupAvailable] = useState(applePlaceIdLookupAvailable), [lookupStatus, setLookupStatus] = useState("");
     const [mode, setMode] = useState<AppleSearchMode>("business"), [query, setQuery] = useState("");
     const [edits, setEdits] = useState(0), [busy, setBusy] = useState(false), [error, setError] = useState("");
     const [action, setAction] = useState<"complete" | "search">("complete");
@@ -65,8 +66,24 @@ function SearchPreview({ userId }: { userId: string }) {
         resolving.current?.abort(); resolving.current = null; resetAppleSearch();
         setQuery(value); setMode(nextMode); setAction(nextAction); setEdits(value => value + 1);
         setSuggestions([]); setCandidates([]); setSelected(null); setConfirmed(false); setError(""); setFinished(null);
+        setLookupStatus("");
         setLoadingText(nextAction === "search" ? "Searching Apple locations..." : "Loading Apple suggestions...");
         setBusy(available && value.trim().length >= 3);
+    }
+
+    async function lookupSelectedPlace() {
+        if (!alive.current || visibleGeneration !== generation.current || resolving.current || !lookupAvailable || !selected?.placeId) return;
+        const controller = new AbortController(); resolving.current = controller;
+        setBusy(true); setError(""); setLookupStatus(""); setConfirmed(false);
+        try {
+            const locations = await lookupApplePlace(selected.placeId, selected.kind, controller.signal);
+            if (!alive.current || controller.signal.aborted || visibleGeneration !== generation.current) return;
+            if (locations.length === 1) {
+                setSelected(locations[0]);
+                setLookupStatus("Place ID lookup returned current Apple details. Nothing was saved.");
+            } else setLookupStatus("No current Apple details are available for this ID. The previous search preview remains. Return to search to choose another location.");
+        } catch (error) { if (alive.current && !controller.signal.aborted && visibleGeneration === generation.current) setError(appleSearchErrorMessage(error)); }
+        finally { if (alive.current && resolving.current === controller) { resolving.current = null; setBusy(false); } }
     }
     async function chooseSuggestion(item: AppleSearchSuggestion) {
         if (!alive.current || visibleGeneration !== generation.current || resolving.current || !suggestions.some(value => value.id === item.id)) return;
@@ -90,7 +107,9 @@ function SearchPreview({ userId }: { userId: string }) {
         <View style={layout.mapHeader}>
             <Pressable accessibilityRole="button" style={layout.returnButton} onPress={() => {
                 if (!alive.current || visibleGeneration !== generation.current) return;
-                setSelected(null); setConfirmed(false);
+                generation.current++;
+                resolving.current?.abort(); resolving.current = null; resetAppleSearch();
+                setSelected(null); setConfirmed(false); setBusy(false); setError(""); setLookupStatus("");
             }}>
                 <Text style={styles.secondaryText}>Return to search</Text></Pressable>
             <Text style={layout.legend}>Blue: Apple restaurant/location · Red: saved Geoapify</Text>
@@ -99,13 +118,21 @@ function SearchPreview({ userId }: { userId: string }) {
         <ScrollView style={layout.details} contentContainerStyle={layout.detailsContent}>
             <Text style={styles.cardTitle}>Apple: {selected.name}</Text>
             <Text style={layout.detailText}>{selected.address}{"\n"}{selected.latitude}, {selected.longitude}</Text>
+            <Text selectable style={layout.detailText}>{selected.placeId ? `Apple Place ID: ${selected.placeId}` : "Apple Place ID: unavailable for this result."}</Text>
+            {!lookupAvailable && <Text style={layout.detailText}>Place ID lookup requires iOS 18 or later and an updated local debug build. Search preview is still available.</Text>}
+            <Pressable accessibilityRole="button" disabled={busy || !lookupAvailable || !selected.placeId}
+                style={layout.returnButton} onPress={lookupSelectedPlace}>
+                <Text style={styles.secondaryText}>Look up Apple Place ID again</Text></Pressable>
+            {busy && <Text accessibilityLiveRegion="polite" style={styles.message}>Looking up Apple Place ID...</Text>}
+            {lookupStatus !== "" && <Text accessibilityLiveRegion="polite" style={layout.detailText}>{lookupStatus}</Text>}
+            {error !== "" && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
             {savedStatus()}
             {saved && <>
                 <Text style={styles.cardTitle}>Saved Geoapify: {saved.name}</Text>
                 <Text style={layout.detailText}>{saved.address}{"\n"}{saved.latitude}, {saved.longitude}</Text>
                 <Text style={layout.detailText}>The pins differ by approximately {pinDistanceMeters(selected, saved)} meters. This does not prove either pin is correct.</Text>
             </>}
-            <Pressable accessibilityRole="button" style={layout.returnButton} onPress={() => {
+            <Pressable accessibilityRole="button" disabled={busy} style={layout.returnButton} onPress={() => {
                 if (alive.current && visibleGeneration === generation.current) setConfirmed(true);
             }}>
                 <Text style={styles.secondaryText}>Looks correct (preview only)</Text></Pressable>

@@ -37,8 +37,12 @@ function setup(options = {}) {
             return options.resolve ? options.resolve(suggestionId, requestId) : Promise.resolve([location(requestId + ':0')]); },
         search(query, mode, requestId) { calls.push({ action: 'search', query, mode, requestId });
             return options.search ? options.search(query, mode, requestId) : Promise.resolve([location(requestId + ':0', { kind: mode })]); },
+        supportsPlaceIdLookup: () => options.lookupAvailable !== false,
+        lookupPlace(placeId, mode, requestId) { calls.push({ action: 'lookup', placeId, mode, requestId });
+            return options.lookup ? options.lookup(placeId, mode, requestId) : Promise.resolve([location(requestId + ':0', { placeId, kind: mode })]); },
         async cancel(id) { cancel.push(id); }, async reset() { reset.push(true); } };
     if (options.oldModule) delete native.search;
+    if (options.oldLookupModule) { delete native.lookupPlace; delete native.supportsPlaceIdLookup; }
     const rt = runtime({ development: true, platform: 'ios', setTimeout: time.setTimeout, clearTimeout: time.clearTimeout,
         ...options,
         mocks: { expo: { requireOptionalNativeModule(name) { assert.equal(name, 'GroupBiteMapKitSearch'); lookups++; return options.missing ? null : native; } },
@@ -218,6 +222,132 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
             await r.settle(); held.resolve([{ id: '1:0', title: 'obsolete', subtitle: '' }]); await r.settle();
             assert.equal(markers(r).length, 0); assert.equal(suggestions(r).length, 0); assert.equal(f.rt.world.lateUpdates, 0);
             assert(f.reset.length > 0); r.unmount();
+        }
+    });
+    await test('Optional opaque Place IDs preserve temporary IDs on completion resolution and text search', async () => {
+        for (const placeId of [undefined, null, 'Opaque:Mixed-Case/ref', 'I63802885C8189B2B']) {
+            const f = setup({ resolve: (_, requestId) => Promise.resolve([location(requestId + ':0', { placeId, secret: 'discard', selectionReceipt: 'discard' })]),
+                search: (_, mode, requestId) => Promise.resolve([location(requestId + ':0', { placeId, kind: mode })]) });
+            for (const row of [
+                ...(await f.api.resolveAppleSuggestion('1:0', new AbortController().signal)),
+                ...(await f.api.searchApplePlaces('Synthetic address', 'address', new AbortController().signal)),
+            ]) {
+                assert.match(row.id, /^[0-9]+:0$/);
+                assert.equal(row.placeId, placeId ?? undefined);
+                assert.equal('placeId' in row, typeof placeId === 'string');
+                assert(!('selectionReceipt' in row)); assert(!('secret' in row));
+            }
+            assert.equal(f.rt.world.requests.length, 0); assert.equal(f.rt.world.localWrites, 0);
+        }
+        for (const placeId of ['', ' ', ' padded', 'bad\nID', 'bad\u0085ID', 'x'.repeat(301), 12, {}]) {
+            const f = setup({ search: () => Promise.resolve([location('1:0', { placeId })]) });
+            await error(f, () => f.api.searchApplePlaces('Synthetic address', 'address', new AbortController().signal));
+        }
+    });
+    await test('Older binaries/OS versions retain search, disable only lookup, and release/platform gates hold', async () => {
+        for (const opts of [{ oldLookupModule: true }, { lookupAvailable: false }]) {
+            const f = setup(opts);
+            assert.equal(f.api.appleSearchAvailable(), true); assert.equal(f.api.applePlaceIdLookupAvailable(), false);
+            assert.equal((await f.api.searchApplePlaces('Synthetic query', 'business', new AbortController().signal)).length, 1);
+            const e = await error(f, () => f.api.lookupApplePlace('Opaque-ID', 'business', new AbortController().signal));
+            assert.equal(e.kind, 'unavailable'); assert(e.message.includes('iOS 18'));
+            assert.equal(f.calls.filter(c => c.action === 'lookup').length, 0);
+            const r = f.render(); await r.settle(); await preview(f, r);
+            assert(textOf(r.output).includes('Search preview is still available'));
+            assert(nodes(r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === 'Look up Apple Place ID again').props.disabled);
+            r.unmount();
+        }
+        const broken = setup(); broken.native.supportsPlaceIdLookup = () => { throw new Error('private raw capability'); };
+        assert.equal(broken.api.applePlaceIdLookupAvailable(), false);
+        delete broken.native.supportsPlaceIdLookup;
+        assert.equal(broken.api.applePlaceIdLookupAvailable(), false);
+        for (const opts of [{ development: false }, { platform: 'android' }, { platform: 'web' }, { missing: true }]) {
+            const f = setup(opts); assert.equal(f.api.applePlaceIdLookupAvailable(), false);
+            await error(f, () => f.api.lookupApplePlace('Opaque-ID', 'business', new AbortController().signal));
+            assert.equal(f.calls.length, 0);
+        }
+    });
+    await test('Identifier lookup preserves exact references, accepts changed/absent IDs, and validates single results', async () => {
+        for (const mode of ['business', 'address']) {
+            const f = setup({ lookup: (_, kind, requestId) => Promise.resolve([location(requestId + ':0', { placeId: 'New-Alias', kind })]) });
+            const rows = await f.api.lookupApplePlace('Opaque:Mixed-Case/ref', mode, new AbortController().signal);
+            assert.equal(f.calls[0].placeId, 'Opaque:Mixed-Case/ref'); assert.equal(f.calls[0].mode, mode);
+            assert.equal(rows[0].placeId, 'New-Alias'); assert.equal(rows[0].id, f.calls[0].requestId + ':0');
+        }
+        const missingId = setup({ lookup: (_, kind, requestId) => Promise.resolve([location(requestId + ':0', { kind })]) });
+        assert(!('placeId' in (await missingId.api.lookupApplePlace('Original-ID', 'business', new AbortController().signal))[0]));
+        for (const [placeId, mode] of [['', 'business'], [' padded', 'business'], ['bad\nID', 'address'], ['x'.repeat(301), 'address'], ['valid', 'other']]) {
+            const f = setup(); assert.equal((await error(f, () => f.api.lookupApplePlace(placeId, mode, new AbortController().signal))).kind, 'invalid');
+            assert.equal(f.calls.length, 0);
+        }
+        for (const result of [null, {}, [location('1:0'), location('1:1')], [location('bad')],
+            [location('1:0', { longitude: Infinity })], [location('1:0', { placeId: 123 })], [location('1:0', { source: 'geoapify' })]]) {
+            const f = setup({ lookup: () => Promise.resolve(result) });
+            await error(f, () => f.api.lookupApplePlace('Valid-ID', 'business', new AbortController().signal));
+        }
+    });
+    await test('Lookup adapter cancellation/deadline discard late responses and never retry', async () => {
+        for (const timedOut of [false, true]) {
+            const held = defer(), f = setup({ lookup: () => held.promise }), controller = new AbortController();
+            const pending = error(f, () => f.api.lookupApplePlace('Opaque-ID', 'business', controller.signal));
+            if (timedOut) await f.time.advance(10000); else controller.abort();
+            assert.equal((await pending).kind, timedOut ? 'timeout' : 'cancelled');
+            assert.equal(f.calls.length, 1); assert.equal(f.cancel.length, 1);
+            held.resolve([location('1:0')]); await f.time.advance(20000);
+            assert.equal(f.calls.length, 1); assert.equal(f.time.size, 0);
+        }
+        const f = setup(), cancelled = new AbortController(); cancelled.abort();
+        await error(f, () => f.api.lookupApplePlace('Opaque-ID', 'business', cancelled.signal)); assert.equal(f.calls.length, 0);
+    });
+    await test('Search-to-ID-to-lookup updates only the transient Apple preview, never the saved pin', async () => {
+        const f = setup({ search: (_, kind, requestId) => Promise.resolve([location(requestId + ':0', { placeId: 'Original-ID', kind })]),
+            lookup: (_, kind, requestId) => Promise.resolve([location(requestId + ':0', { placeId: 'Current-ID', kind, name: 'Fresh Apple restaurant', latitude: 37.554 })]) });
+        const r = f.render(); await r.settle(); await click(r, 'Search Chipotle in Apple Maps'); await f.time.advance(400, r);
+        assert.equal(f.calls.length, 1); candidates(r)[0].props.onPress(); await r.settle();
+        assert(textOf(r.output).includes('Apple Place ID: Original-ID')); assert.equal(f.calls.length, 1);
+        await click(r, 'Look up Apple Place ID again');
+        assert.equal(f.calls.length, 2); assert.equal(f.calls[1].action, 'lookup'); assert.equal(f.calls[1].placeId, 'Original-ID');
+        assert(textOf(r.output).includes('Apple Place ID: Current-ID')); assert(textOf(r.output).includes('returned current Apple details'));
+        assert.equal(markers(r).find(n => n.props.pinColor === 'blue').props.coordinate.latitude, 37.554);
+        assert.equal(markers(r).find(n => n.props.pinColor === 'red').props.coordinate.latitude, saved().latitude);
+        assert.equal(f.rt.world.localWrites, 0); assert.equal(f.rt.world.requests.length, 1);
+        await click(r, 'Return to search'); assert.equal(candidates(r).length, 1); await f.time.advance(20000, r);
+        assert.equal(f.calls.length, 2); r.unmount();
+        const noId = setup(), other = noId.render(); await other.settle(); await preview(noId, other);
+        assert(textOf(other.output).includes('unavailable for this result'));
+        assert(nodes(other.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === 'Look up Apple Place ID again').props.disabled);
+        other.unmount();
+    });
+    await test('Empty and failed lookups leave the prior preview intact and require another explicit action', async () => {
+        for (const failure of [false, true]) {
+            const f = setup({ resolve: (_, requestId) => Promise.resolve([location(requestId + ':0', { placeId: 'Original-ID' })]),
+                lookup: () => failure ? Promise.reject({ code: 'UNKNOWN', message: 'private raw lookup' }) : Promise.resolve([]) });
+            const r = f.render(); await r.settle(); await preview(f, r); await click(r, 'Look up Apple Place ID again');
+            assert(textOf(r.output).includes(failure ? 'unavailable' : 'No current Apple details'));
+            assert(!textOf(r.output).includes('private raw lookup')); assert(textOf(r.output).includes('Apple Place ID: Original-ID'));
+            assert.equal(markers(r).find(n => n.props.pinColor === 'blue').props.coordinate.latitude, location().latitude);
+            await f.time.advance(20000, r); assert.equal(f.calls.filter(c => c.action === 'lookup').length, 1);
+            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+        }
+    });
+    await test('Pending lookup double taps, return-to-search and privacy lifecycle discard obsolete responses', async () => {
+        for (const action of ['return', 'background', 'blur', 'signout', 'switch', 'unmount']) {
+            const held = defer(), f = setup({ resolve: (_, requestId) => Promise.resolve([location(requestId + ':0', { placeId: 'Original-ID' })]), lookup: () => held.promise });
+            const r = f.render(); await r.settle(); await preview(f, r);
+            const button = nodes(r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === 'Look up Apple Place ID again');
+            const one = button.props.onPress(), two = button.props.onPress(); await r.settle();
+            assert.equal(f.calls.filter(c => c.action === 'lookup').length, 1); assert(textOf(r.output).includes('Looking up Apple Place ID'));
+            if (action === 'return') await click(r, 'Return to search');
+            if (action === 'background') f.rt.emit('background');
+            if (action === 'blur') { f.rt.world.focused = false; r.dirty = true; }
+            if (action === 'signout') f.rt.switch(null, r);
+            if (action === 'switch') f.rt.switch('b', r);
+            if (action === 'unmount') r.unmount();
+            await r.settle(); held.resolve([location('99:0', { name: 'Obsolete Apple result', placeId: 'Old-account-ID' })]);
+            await one; await two; await r.settle(); await button.props.onPress();
+            assert(!textOf(r.output).includes('Obsolete Apple result')); assert(!textOf(r.output).includes('Old-account-ID'));
+            assert.equal(f.rt.world.lateUpdates, 0); assert.equal(f.calls.filter(c => c.action === 'lookup').length, 1);
+            assert.equal(f.cancel.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
         }
     });
     console.log(`${passed} offline native Apple search checks passed.`);

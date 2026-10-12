@@ -109,3 +109,85 @@ Official references: [Expo local modules/autolinking](https://docs.expo.dev/modu
 [Expo custom native code](https://docs.expo.dev/workflow/customizing/),
 [Apple search requests](https://developer.apple.com/documentation/mapkit/mklocalsearch/request),
 [Apple autocomplete](https://developer.apple.com/documentation/mapkit/mklocalsearchcompleter).
+
+## Milestone 16A — transient Apple Place ID round-trip
+
+Search and completion-resolution results still use their temporary `requestId:index`
+IDs for selection. In the updated Debug binary on iOS 18 or later, a result may
+also include `placeId`, taken directly from `MKMapItem.identifier.rawValue`. The
+adapter preserves this optional opaque reference without changing its case or
+format. Missing/null IDs from older binaries normalize to an absent field; search
+and comparison continue to work. No Place ID is invented from coordinates,
+names, addresses, URLs or completion handles.
+
+The selected preview displays the Place ID and offers **Look up Apple Place ID
+again**. This explicit action creates an `MKMapItemRequest(mapItemIdentifier:)`
+after the native failable identifier initializer accepts the reference. A
+successful lookup updates only the in-memory Apple preview and its blue marker;
+the authorized red saved Geoapify pin is unchanged. Lookup can return a different
+current identifier or no identifier. The search candidates remain intact when
+returning to search. There is no search fallback, automatic lookup or retry.
+
+The lookup button is disabled for results without IDs, iOS versions before 18,
+and older binaries lacking the new methods. Existing `isAvailable`/search gating
+is unchanged. The new capability and lookup entrypoints retain Swift `DEBUG`
+guards, JS development/iOS guards, and the existing `debugOnly` autolinking
+configuration. No deployment-target increase, dependency, API key, Supabase
+change, database migration or saved-data change is needed.
+
+Lookup uses the existing eight-second native and ten-second adapter deadlines.
+Cancellation, reset, replacement work, background, blur, unmount, sign-out and
+account changes discard pending results. Returning to search cancels a pending
+lookup too. Native lookup ownership uses an opaque operation token so a late
+callback cannot settle replacement work even if a request ID is reused. The
+native session stores a cancellation closure instead of an iOS-18-only request
+type, preserving compatibility with the pod's iOS 15.1 deployment target.
+
+A not-found/nil result or unusable preview geometry produces a visible empty
+lookup status while keeping the previous search preview. Transport failures and
+timeouts show sanitized errors instead; they do not establish that a place is
+permanently gone. Neither outcome changes a saved resolution status. All Apple
+search/lookup text, IDs and results stay in memory and are discarded with the
+preview. There are no logs, location permissions, attachment receipts or writes.
+This milestone does not add lookup across app restarts or persistent bookmarks.
+
+### Rebuild and Simulator acceptance
+
+1. Run `npx expo run:ios --device` and choose an **iOS 18 or later Simulator**.
+   Launch the newly built GroupBite Debug app, not Expo Go. Metro reload alone
+   cannot install the new native methods. Do not run `prebuild --clean`.
+2. Sign in, open **My Places → View My Places on Map → Try Apple Maps Search**,
+   then explicitly search Chipotle or another business. Select the matching
+   location and check that its temporary result selection still works.
+3. When Apple supplies an ID, tap **Look up Apple Place ID again**. Check the
+   returned Apple details/blue pin and the success status. The saved red pin must
+   remain unchanged. Test the autocomplete → resolve → select path as well.
+4. For a result without an ID, verify that preview/comparison work and lookup is
+   disabled. On an older iOS runtime/binary, search must still work with the
+   capability explanation. ID coverage is a live Apple response property; an
+   address search is not guaranteed to return an ID.
+5. While lookup is pending, return to search, background, navigate away, and
+   sign out/switch accounts. Obsolete results must not restore private UI. Check
+   double taps and network failure; retry requires another explicit action.
+
+Focused checks: `node tests/apple-map-search.cjs` covers both search paths, optional
+IDs, older binaries/OS capability responses, opaque-reference/result validation,
+round-trip UI, empty/error states, double taps, deadlines and privacy lifecycle.
+`node tests/apple-map-search-native.cjs` compiles the actual Swift engine in Debug
+mode with Foundation-only fakes; it covers identifier lookup, safe outcomes,
+reset/cancellation/timeout, replacement work and late callbacks. These tests make
+no provider requests and cannot establish live Apple ID coverage or relevance.
+TypeScript, targeted ESLint, Swift syntax parsing, and actual iOS SDK engine
+type-checks in Debug/Release should also pass. An engine SDK check uses a stub
+Expo Promise; it is not a full Expo bridge/app build or native runtime test.
+
+Implementation validation: 21 Apple adapter/screen checks, 14 Swift engine
+checks, 11 personal-map checks, 23 personal-place checks, 11 authentication/
+navigation checks and 6 stabilization checks passed. TypeScript, targeted ESLint,
+Swift syntax, podspec Ruby syntax and diff whitespace checks passed. Debug and
+Release engine type-checks passed against the installed iOS 18.2 Simulator SDK
+with an iOS 15.1 target and a stub Expo Promise. Full app compilation and live
+Simulator acceptance remain to be performed after rebuilding.
+
+Apple references: [Place ID lifetime, aliases and storage guidance](https://developer.apple.com/documentation/mapkit/identifying-unique-locations-with-place-ids?changes=_1_9),
+[native search and identifier lookup sample](https://developer.apple.com/documentation/mapkit/interacting-with-nearby-points-of-interest).

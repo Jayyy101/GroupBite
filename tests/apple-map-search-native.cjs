@@ -16,7 +16,7 @@ const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'groupbite-mapkit-offlin
 try {
     const source = path.join(directory, 'main.swift'), binary = path.join(directory, 'checks');
     fs.writeFileSync(source, fixture.replace('// ENGINE_INSERTION_POINT', native.slice(native.indexOf(marker))));
-    const compiled = spawnSync('swiftc', ['-swift-version', '5', '-module-cache-path', path.join(directory, 'cache'), source, '-o', binary], { encoding: 'utf8' });
+    const compiled = spawnSync('swiftc', ['-D', 'DEBUG', '-swift-version', '5', '-module-cache-path', path.join(directory, 'cache'), source, '-o', binary], { encoding: 'utf8' });
     if (compiled.error) throw compiled.error;
     assert.equal(compiled.status, 0, compiled.stdout + compiled.stderr);
     const checked = spawnSync(binary, [], { encoding: 'utf8' });

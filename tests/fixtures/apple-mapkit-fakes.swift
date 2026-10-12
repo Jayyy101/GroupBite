@@ -51,7 +51,29 @@ private struct Placemark {
   var postalAddress: PostalAddress? = PostalAddress(text: "Synthetic address\nFremont")
   var title: String? = "Synthetic address"
 }
-private struct MapItem { var name: String? = "Synthetic restaurant"; var placemark = Placemark() }
+private struct MapItem {
+  final class Identifier {
+    let rawValue: String
+    init?(rawValue: String) {
+      if rawValue == "Malformed-native-ID" { return nil }
+      self.rawValue = rawValue
+    }
+  }
+  var name: String? = "Synthetic restaurant"
+  var placemark = Placemark()
+  var identifier: Identifier?
+}
+private typealias MKMapItem = MapItem
+private final class MKMapItemRequest {
+  static var instances: [MKMapItemRequest] = []
+  let mapItemIdentifier: MKMapItem.Identifier
+  var cancelled = false
+  var callback: ((MKMapItem?, Error?) -> Void)?
+  init(mapItemIdentifier: MKMapItem.Identifier) { self.mapItemIdentifier = mapItemIdentifier; Self.instances.append(self) }
+  func getMapItem(completionHandler: @escaping (MKMapItem?, Error?) -> Void) { callback = completionHandler }
+  func cancel() { cancelled = true }
+  func finish(_ item: MKMapItem? = MKMapItem(), error: Error? = nil) { callback?(item, error) }
+}
 private struct SearchResponse { var mapItems: [MapItem] }
 private struct MKError: Error { enum Code { case placemarkNotFound, serverFailure }; var code: Code }
 private final class MKLocalSearch {
@@ -166,6 +188,100 @@ private func runTests() {
     var bad = MapItem(); bad.placemark.coordinate.latitude = .infinity
     MKLocalSearch.instances.last!.finish([bad]); assert(rows(promise).isEmpty)
     session.reset()
+  }
+  check("Both search paths expose optional raw Place IDs without changing temporary handles") {
+    for direct in [false, true] {
+      let session = MapKitSearchSession(), promise = Promise()
+      if direct { session.searchPlaces(query: "Synthetic query", mode: "business", requestId: "20", promise: promise) }
+      else {
+        let completion = Promise()
+        session.complete(query: "Synthetic query", mode: "business", requestId: "19", promise: completion)
+        MKLocalSearchCompleter.instances.last!.update([MKLocalSearchCompletion("Synthetic restaurant")])
+        session.resolve(suggestionId: "19:0", requestId: "20", promise: promise)
+      }
+      let item = MKMapItem(identifier: .init(rawValue: "Opaque:Mixed-Case/ref"))
+      MKLocalSearch.instances.last!.finish([item, MKMapItem()])
+      assert(rows(promise)[0]["id"] as? String == "20:0")
+      assert(rows(promise)[0]["placeId"] as? String == "Opaque:Mixed-Case/ref")
+      assert(rows(promise)[1]["id"] as? String == "20:1" && rows(promise)[1]["placeId"] == nil)
+    }
+  }
+  check("Identifier lookup uses only MKMapItemRequest and allows a current alias or absent returned ID") {
+    for returnedId in ["Current-Alias", nil] {
+      let session = MapKitSearchSession(), promise = Promise()
+      let before = MKLocalSearch.instances.count, completionsBefore = MKLocalSearchCompleter.instances.count
+      session.lookupPlace(placeId: "Opaque:Mixed-Case/ref", mode: "address", requestId: "21", promise: promise)
+      let request = MKMapItemRequest.instances.last!
+      assert(request.mapItemIdentifier.rawValue == "Opaque:Mixed-Case/ref")
+      request.finish(MKMapItem(identifier: returnedId.flatMap { .init(rawValue: $0) }))
+      assert(rows(promise).count == 1 && rows(promise)[0]["id"] as? String == "21:0")
+      assert(rows(promise)[0]["kind"] as? String == "address" && rows(promise)[0]["source"] as? String == "apple-maps-preview")
+      assert(rows(promise)[0]["placeId"] as? String == returnedId)
+      assert(MKLocalSearch.instances.count == before && MKLocalSearchCompleter.instances.count == completionsBefore)
+      assert(promise.settlements == 1)
+      request.finish(); assert(promise.settlements == 1)
+      session.reset()
+    }
+  }
+  check("Lookup validates references, request IDs and modes without invoking MapKit") {
+    for (placeId, mode, requestId) in [("", "business", "22"), (" padded", "business", "22"),
+      ("bad\nID", "business", "22"), (String(repeating: "x", count: 301), "business", "22"),
+      ("Malformed-native-ID", "business", "22"), ("Opaque-ID", "other", "22"), ("Opaque-ID", "business", "bad")] {
+      let session = MapKitSearchSession(), promise = Promise(), before = MKMapItemRequest.instances.count
+      session.lookupPlace(placeId: placeId, mode: mode, requestId: requestId, promise: promise)
+      assert(promise.code == "ERR_INVALID" && promise.settlements == 1 && MKMapItemRequest.instances.count == before)
+    }
+  }
+  check("Lookup no-results, invalid geometry and transport failures have safe distinct outcomes") {
+    for code in [MKError.Code.placemarkNotFound, .serverFailure] {
+      let session = MapKitSearchSession(), promise = Promise()
+      session.lookupPlace(placeId: "Opaque-ID", mode: "business", requestId: "23", promise: promise)
+      MKMapItemRequest.instances.last!.finish(nil, error: MKError(code: code))
+      if code == .placemarkNotFound { assert(rows(promise).isEmpty && promise.code == nil) }
+      else { assert(promise.code == "ERR_UNAVAILABLE" && promise.message == "Apple lookup is unavailable.") }
+      assert(promise.settlements == 1)
+    }
+    var invalid = MKMapItem(); invalid.placemark.coordinate.latitude = .infinity
+    for item in [nil, invalid] {
+      let session = MapKitSearchSession(), promise = Promise()
+      session.lookupPlace(placeId: "Opaque-ID", mode: "business", requestId: "24", promise: promise)
+      MKMapItemRequest.instances.last!.finish(item)
+      assert(rows(promise).isEmpty && promise.code == nil && promise.settlements == 1)
+    }
+  }
+  check("Lookup cancellation/reset/timeout reject once and ignore late callbacks") {
+    for action in ["cancel", "reset", "timeout"] {
+      let session = MapKitSearchSession(), promise = Promise()
+      session.lookupPlace(placeId: "Opaque-ID", mode: "business", requestId: "25", promise: promise)
+      let request = MKMapItemRequest.instances.last!
+      session.cancel(requestId: "999"); assert(!request.cancelled)
+      if action == "cancel" { session.cancel(requestId: "25") }
+      if action == "reset" { session.reset() }
+      if action == "timeout" {
+        let work = Mirror(reflecting: session).children.first { $0.label == "timeout" }!.value as! DispatchWorkItem?
+        work!.perform()
+      }
+      assert(request.cancelled && promise.code == (action == "timeout" ? "ERR_TIMEOUT" : "ERR_CANCELLED"))
+      request.finish(); assert(promise.settlements == 1 && promise.value == nil)
+    }
+  }
+  check("Search and lookup replacement cancel old work even when request IDs repeat") {
+    let session = MapKitSearchSession(), old = Promise(), fresh = Promise(), searched = Promise()
+    session.searchPlaces(query: "Synthetic query", mode: "business", requestId: "26", promise: searched)
+    let search = MKLocalSearch.instances.last!
+    session.lookupPlace(placeId: "Old-ID", mode: "business", requestId: "26", promise: old)
+    assert(search.cancelled && searched.code == "ERR_CANCELLED")
+    search.finish(); assert(searched.settlements == 1)
+    let oldRequest = MKMapItemRequest.instances.last!
+    session.lookupPlace(placeId: "New-ID", mode: "business", requestId: "26", promise: fresh)
+    assert(oldRequest.cancelled && old.code == "ERR_CANCELLED")
+    oldRequest.finish(); assert(old.settlements == 1 && fresh.settlements == 0)
+    let freshRequest = MKMapItemRequest.instances.last!, next = Promise()
+    session.complete(query: "Synthetic query", mode: "business", requestId: "27", promise: next)
+    assert(freshRequest.cancelled && fresh.code == "ERR_CANCELLED")
+    freshRequest.finish(); assert(fresh.settlements == 1)
+    let stale = Promise(); session.resolve(suggestionId: "19:0", requestId: "28", promise: stale)
+    assert(stale.code == "ERR_INVALID"); session.reset()
   }
   print("\(passed) offline Swift MapKit engine checks passed.")
 }
