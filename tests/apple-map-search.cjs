@@ -350,5 +350,58 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
             assert.equal(f.cancel.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
         }
     });
+    await test('Ordinary address candidates outside Fremont stay selectable with or without Apple Place IDs', async () => {
+        for (const placeId of [undefined, 'Opaque-Address-ID']) {
+            const address = 'Synthetic street, Other City, NY, US';
+            const f = setup({ saved: false, complete: () => Promise.resolve([]),
+                search: (_, kind, requestId) => Promise.resolve([
+                    location(requestId + ':0', { kind, name: 'First street match', address, latitude: 40.7, longitude: -74.0 }),
+                    location(requestId + ':1', { kind, name: address, address, latitude: 40.71, longitude: -74.01, placeId }),
+                ]) });
+            const r = f.render(); await r.settle(); await click(r, 'Addresses'); await type(f, r, address);
+            assert(textOf(r.output).includes('No Apple suggestions')); await click(r, 'Search places'); await f.time.advance(400, r);
+            assert.equal(f.calls.at(-1).query, address); assert.equal(f.calls.at(-1).mode, 'address');
+            assert.equal(candidates(r).length, 2); assert.equal(markers(r).length, 0); // Never choose an ambiguous match automatically.
+            candidates(r)[1].props.onPress(); await r.settle();
+            assert.equal(markers(r).length, 1); assert.equal(markers(r)[0].props.coordinate.latitude, 40.71);
+            assert(textOf(r.output).includes(placeId ? 'Apple Place ID: ' + placeId : 'Apple Place ID: unavailable for this result.'));
+            const lookup = nodes(r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === 'Look up Apple Place ID again');
+            assert.equal(lookup.props.disabled, !placeId);
+            assert.equal(f.calls.filter(c => c.action === 'lookup').length, 0);
+            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+        }
+    });
+    await test('Fresh preview runtimes resolve the manually re-entered address without stored results or IDs', async () => {
+        const address = 'Synthetic street, Other City, NY, US';
+        for (let launch = 0; launch < 2; launch++) {
+            const f = setup({ saved: false, complete: () => Promise.resolve([]), search: (_, kind, requestId) =>
+                Promise.resolve([location(requestId + ':0', { kind, name: address, address, latitude: 40.7, longitude: -74.0 })]) });
+            const r = f.render(); await r.settle();
+            assert.equal(f.calls.length, 0); assert.equal(markers(r).length, 0);
+            assert.equal(nodes(r.output).find(n => n.type === 'TextInput').props.value, '');
+            await click(r, 'Addresses'); await type(f, r, address); await click(r, 'Search places'); await f.time.advance(400, r);
+            assert.equal(f.calls.filter(c => c.action === 'search').length, 1); assert.equal(f.calls.at(-1).query, address);
+            candidates(r)[0].props.onPress(); await r.settle();
+            assert.equal(markers(r)[0].props.coordinate.latitude, 40.7);
+            assert(textOf(r.output).includes('unavailable for this result'));
+            assert.equal(f.rt.world.localReads, 0); assert.equal(f.rt.world.localWrites, 0);
+            assert.equal(f.calls.filter(c => c.action === 'resolve' || c.action === 'lookup').length, 0);
+            r.unmount(); assert(f.reset.length > 0);
+        }
+    });
+    await test('Ordinary address empty/failed/timed-out searches remain distinct without retries or provider fallback', async () => {
+        for (const code of [null, 'ERR_UNAVAILABLE', 'ERR_TIMEOUT']) {
+            const f = setup({ saved: false, complete: () => Promise.resolve([]), search: () => code === null
+                ? Promise.resolve([]) : Promise.reject({ code, message: 'private raw address failure' }) });
+            const r = f.render(); await r.settle(); await click(r, 'Addresses'); await type(f, r, 'Synthetic street, Other City');
+            await click(r, 'Search places'); await f.time.advance(400, r);
+            assert(textOf(r.output).includes(code === null ? 'No matching Apple locations' : code === 'ERR_TIMEOUT' ? 'timed out' : 'unavailable'));
+            assert(!textOf(r.output).includes('private raw address failure'));
+            if (code !== null) assert(!textOf(r.output).includes('No matching Apple locations'));
+            await f.time.advance(20000, r); assert.equal(f.calls.filter(c => c.action === 'search').length, 1);
+            assert.equal(candidates(r).length, 0); assert.equal(markers(r).length, 0);
+            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+        }
+    });
     console.log(`${passed} offline native Apple search checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -13,9 +13,12 @@ private struct CLLocationCoordinate2D { var latitude: Double; var longitude: Dou
 private func CLLocationCoordinate2DIsValid(_ coordinate: CLLocationCoordinate2D) -> Bool {
   coordinate.latitude.isFinite && coordinate.longitude.isFinite && abs(coordinate.latitude) <= 90 && abs(coordinate.longitude) <= 180
 }
+private struct MKMapRect { static let world = MKMapRect() }
 private struct MKCoordinateRegion {
   var center: CLLocationCoordinate2D
+  var spansWorld = false
   init(center: CLLocationCoordinate2D = .init(latitude: 0, longitude: 0), latitudinalMeters: Double = 0, longitudinalMeters: Double = 0) { self.center = center }
+  init(_ rect: MKMapRect) { center = .init(latitude: 0, longitude: 0); spansWorld = true }
 }
 private struct ResultTypes: OptionSet {
   let rawValue: Int
@@ -282,6 +285,83 @@ private func runTests() {
     freshRequest.finish(); assert(fresh.settlements == 1)
     let stale = Promise(); session.resolve(suggestionId: "19:0", requestId: "28", promise: stale)
     assert(stale.code == "ERR_INVALID"); session.reset()
+  }
+  check("Address autocomplete, resolution and text search use a world region; businesses retain Fremont") {
+    for mode in ["address", "business"] {
+      let session = MapKitSearchSession(), completion = Promise()
+      session.complete(query: "Synthetic street, Other City", mode: mode, requestId: "30", promise: completion)
+      let completer = MKLocalSearchCompleter.instances.last!
+      assert(completer.region.spansWorld == (mode == "address"))
+      if mode == "business" { assert(completer.region.center.latitude == 37.5555) }
+      completer.update([MKLocalSearchCompletion("Synthetic street")])
+      let resolved = Promise()
+      session.resolve(suggestionId: "30:0", requestId: "31", promise: resolved)
+      let resolution = MKLocalSearch.instances.last!
+      assert(resolution.request.region.spansWorld == (mode == "address"))
+      resolution.finish()
+      let searched = Promise()
+      session.searchPlaces(query: "Synthetic street, Other City", mode: mode, requestId: "32", promise: searched)
+      let search = MKLocalSearch.instances.last!
+      assert(search.request.region.spansWorld == (mode == "address"))
+      if mode == "business" { assert(search.request.region.center.longitude == -121.9830) }
+      search.finish(); session.reset()
+    }
+  }
+  check("Unnamed ordinary addresses outside Fremont remain selectable with optional real identifiers") {
+    for name in [nil, "", "   "] {
+      let session = MapKitSearchSession(), promise = Promise()
+      session.searchPlaces(query: "Synthetic street, Other City", mode: "address", requestId: "33", promise: promise)
+      var unnamed = MKMapItem(name: name)
+      unnamed.placemark.coordinate = .init(latitude: 40.7, longitude: -74.0)
+      unnamed.placemark.postalAddress = .init(text: "Synthetic street, Other City")
+      var identified = unnamed; identified.identifier = .init(rawValue: "Opaque-Address-ID")
+      MKLocalSearch.instances.last!.finish([unnamed, identified])
+      assert(rows(promise).count == 2)
+      assert(rows(promise)[0]["id"] as? String == "33:0" && rows(promise)[1]["id"] as? String == "33:1")
+      assert(rows(promise)[0]["name"] as? String == "Synthetic street, Other City")
+      assert(rows(promise)[0]["latitude"] as? Double == 40.7 && rows(promise)[0]["longitude"] as? Double == -74.0)
+      assert(rows(promise)[0]["kind"] as? String == "address" && rows(promise)[0]["placeId"] == nil)
+      assert(rows(promise)[1]["placeId"] as? String == "Opaque-Address-ID")
+    }
+    let session = MapKitSearchSession(), invalid = Promise()
+    session.searchPlaces(query: "Synthetic street, Other City", mode: "address", requestId: "34", promise: invalid)
+    var noAddress = MKMapItem(name: nil)
+    noAddress.placemark.postalAddress = nil; noAddress.placemark.title = nil
+    var badGeometry = MKMapItem(name: nil); badGeometry.placemark.coordinate.longitude = .infinity
+    MKLocalSearch.instances.last!.finish([noAddress, badGeometry])
+    assert(rows(invalid).isEmpty)
+    let business = Promise()
+    session.searchPlaces(query: "Synthetic restaurant", mode: "business", requestId: "35", promise: business)
+    MKLocalSearch.instances.last!.finish([MKMapItem(name: nil)])
+    assert(rows(business).isEmpty) // No manufactured business name.
+  }
+  check("Address completion and ID lookup share the unnamed-address fallback without inventing IDs") {
+    let session = MapKitSearchSession(), completion = Promise(), resolved = Promise(), lookedUp = Promise()
+    session.complete(query: "Synthetic street, Other City", mode: "address", requestId: "36", promise: completion)
+    MKLocalSearchCompleter.instances.last!.update([MKLocalSearchCompletion("Synthetic street")])
+    session.resolve(suggestionId: "36:0", requestId: "37", promise: resolved)
+    let item = MKMapItem(name: "")
+    MKLocalSearch.instances.last!.finish([item])
+    assert(rows(resolved)[0]["name"] as? String == "Synthetic address, Fremont")
+    assert(rows(resolved)[0]["placeId"] == nil)
+    session.lookupPlace(placeId: "Existing-Address-ID", mode: "address", requestId: "38", promise: lookedUp)
+    MKMapItemRequest.instances.last!.finish(item)
+    assert(rows(lookedUp)[0]["name"] as? String == "Synthetic address, Fremont")
+    assert(rows(lookedUp)[0]["placeId"] == nil) // Do not synthesize the requested ID.
+  }
+  check("Fresh address sessions reissue the query without completion-cache or Place ID dependence") {
+    for _ in 0..<2 {
+      let session = MapKitSearchSession(), promise = Promise()
+      let before = MKLocalSearch.instances.count
+      session.searchPlaces(query: "Synthetic street, Other City", mode: "address", requestId: "1", promise: promise)
+      assert(MKLocalSearch.instances.count == before + 1)
+      let search = MKLocalSearch.instances.last!
+      assert(search.request.naturalLanguageQuery == "Synthetic street, Other City")
+      assert(search.request.completion == nil && search.request.resultTypes == [.address])
+      search.finish([MKMapItem(name: nil)])
+      assert(rows(promise).count == 1 && rows(promise)[0]["placeId"] == nil)
+      session.reset()
+    }
   }
   print("\(passed) offline Swift MapKit engine checks passed.")
 }

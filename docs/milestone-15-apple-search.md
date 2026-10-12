@@ -63,7 +63,7 @@ the search screen explains the missing bridge instead of crashing.
 ## Boundaries and verification
 
 - `MKLocalSearchCompleter` includes point-of-interest and query suggestions for
-  business mode, or addresses for address mode, with a Fremont region hint and
+  business mode with a Fremont hint, or addresses using a world region, with
   five displayed suggestions. Configuration precedes delegate assignment, and an
   empty callback while `isSearching` is true cannot finish/cancel the request.
   The prior bridge accepted every first callback and excluded business query
@@ -191,3 +191,77 @@ Simulator acceptance remain to be performed after rebuilding.
 
 Apple references: [Place ID lifetime, aliases and storage guidance](https://developer.apple.com/documentation/mapkit/identifying-unique-locations-with-place-ids?changes=_1_9),
 [native search and identifier lookup sample](https://developer.apple.com/documentation/mapkit/interacting-with-nearby-points-of-interest).
+
+## Milestone 16B — ordinary-address experiment
+
+The existing **Addresses** mode already provides autocomplete, explicit **Search
+places**, separate candidate selection, optional Place ID display/lookup and safe
+empty/error states. Reuse it; there is no new screen, geocoder API, native method,
+dependency, automatic reopening or persistence. To repeat an address after an
+app restart, manually enter the same full address and search again. This tests
+fresh resolution without relying on an ID or cached completion.
+
+Two native adjustments support ordinary addresses: address autocomplete,
+completion resolution and text search use an explicit world region instead of
+the Fremont business hint; and address results with nil/blank names use the
+returned formatted address as their display label. Valid coordinates and a
+nonempty returned address are still required. Business behavior retains its
+Fremont hint and existing name validation. Optional Place IDs come only from
+Apple; using an address as a label does not invent a business or an identifier.
+The existing 3–200-character query bound, five-result limit, DEBUG/iOS guards,
+eight/ten-second deadlines, cancellation and privacy cleanup remain unchanged.
+
+### Simulator acceptance
+
+1. Rebuild with `npx expo run:ios --device`, choosing an **iOS 18+ Simulator** to
+   inspect Place IDs. Launch the rebuilt GroupBite Debug app, not Expo Go; Metro
+   reload alone cannot update native search-region/serialization behavior.
+2. Sign in and open **My Places → View My Places on Map → Try Apple Maps Search**.
+   Choose **Addresses**. Use a known ordinary street address without a business
+   listing, within 200 characters, including city, postal code and country. Use
+   public/non-sensitive test addresses; no private-address logs or screenshots.
+3. Test one Fremont address and at least one outside Fremont, such as an ordinary
+   street address in New York or another country. Wait for autocomplete. Select
+   a suggestion and then a candidate, or explicitly tap **Search places** if
+   autocomplete is empty. Verify the street/city and blue pin. A result is not
+   proof of building-level accuracy, and a business listing is not required.
+4. Inspect **Apple Place ID**. If present, use **Look up Apple Place ID again**;
+   if absent, lookup must be disabled while address preview still works. Neither
+   ID presence nor absence is guaranteed for all addresses. Multiple returned
+   locations must remain selectable; never treat the first match as confirmed.
+5. Keep the original test input outside the app. Terminate GroupBite fully from
+   the Simulator app switcher (backgrounding alone is not an app restart), then
+   launch it again. Reopen the preview, choose **Addresses**, manually enter the
+   identical input and explicitly search. The old query/results must not return
+   automatically. Compare the street/city and pin with the first run; exact
+   result order, coordinate or Place ID equality is not a requirement.
+6. Try an incomplete/ambiguous address and a nonexistent address. Apple may
+   return alternatives rather than an empty response; show what it actually
+   returns. Test offline failure/timeouts, quick edits, backgrounding, navigating
+   Back and switching accounts. Stale results must disappear, and failed search
+   must not retry automatically or invoke Geoapify.
+7. Recheck **Businesses → Search Chipotle in Apple Maps**. The existing authorized
+   saved red pin remains unchanged. No ordinary-address test saves anything.
+
+Offline additions cover world-vs-Fremont request regions, unnamed address results,
+optional identifiers, malformed geometry, explicit selection of ambiguous
+outside-Fremont results, distinct failure outcomes and manual re-entry in fresh
+native sessions/JS runtimes. These synthetic tests do not restart a native app or
+call Apple.
+
+Manual tests on the **iPhone 16 Pro Simulator (iOS 18.3)** confirmed successful
+address searches outside Fremont, ordinary street-address autocomplete and map
+pins, and some address results without an Apple Place ID. The SJSU address
+returned the same coordinates after restarting the app and manually searching
+again. Repeated address lookup is verified for these tested examples; this does
+not guarantee coverage, IDs or identical coordinates for every address.
+Automatic persistent reopening is not yet implemented.
+
+Implementation checks passed: 24 Apple adapter/screen checks, 18 Swift engine
+checks, 11 personal-map checks, 23 personal-place checks and 11 authentication/
+navigation checks. TypeScript, targeted ESLint, Swift syntax and diff whitespace
+checks passed. Debug/Release engine type-checks passed against the actual iOS
+18.2 Simulator SDK with an iOS 15.1 target and a stub Expo Promise. This is not
+a full Expo app build or a live native restart/search test.
+
+Reference: [Apple autocomplete region defaults](https://developer.apple.com/documentation/mapkit/mklocalsearchcompleter/region?changes=lat_4_2).

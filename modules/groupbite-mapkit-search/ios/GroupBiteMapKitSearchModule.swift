@@ -73,9 +73,10 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
   private var lookupToken: UUID?
   private var lookupPromise: Promise?
   private var timeout: DispatchWorkItem?
-  // A region hint, not a claim that all results are in Fremont. No device GPS.
+  // Keep the business experiment's Fremont hint; addresses can be anywhere. No GPS.
   private let region = MKCoordinateRegion(center: CLLocationCoordinate2D(latitude: 37.5555, longitude: -121.9830),
     latitudinalMeters: 20000, longitudinalMeters: 20000)
+  private let addressRegion = MKCoordinateRegion(MKMapRect.world)
 
   private func validId(_ id: String) -> Bool {
     !id.isEmpty && id.count <= 20 && id.allSatisfy { $0.isASCII && $0.isNumber }
@@ -109,7 +110,7 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
     completionPromise = promise
     let completer = MKLocalSearchCompleter()
     self.completer = completer
-    completer.region = region
+    completer.region = mode == "business" ? region : addressRegion
     // A restaurant query may complete to a query rather than a specific POI.
     // Configure before assigning the delegate to avoid configuration callbacks.
     completer.resultTypes = mode == "business" ? [.pointOfInterest, .query] : [.address]
@@ -143,7 +144,7 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
       promise.reject("ERR_INVALID", "Select a current suggestion."); return
     }
     let request = MKLocalSearch.Request(completion: completion)
-    request.region = region
+    request.region = mode == "business" ? region : addressRegion
     request.resultTypes = mode == "business" ? [.pointOfInterest] : [.address]
     startSearch(request, mode: mode, requestId: requestId, fallbackName: completion.title, promise: promise)
   }
@@ -157,7 +158,7 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
     self.mode = mode
     let request = MKLocalSearch.Request()
     request.naturalLanguageQuery = query
-    request.region = region
+    request.region = mode == "business" ? region : addressRegion
     request.resultTypes = mode == "business" ? [.pointOfInterest] : [.address]
     startSearch(request, mode: mode, requestId: requestId, fallbackName: "", promise: promise)
   }
@@ -193,8 +194,11 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
       CNPostalAddressFormatter.string(from: $0, style: .mailingAddress)
         .components(separatedBy: .newlines).filter { !$0.isEmpty }.joined(separator: ", ")
     }
-    let name = display(item.name ?? fallbackName, limit: 200)
     let address = display(postalAddress ?? item.placemark.title ?? "", limit: 500)
+    var name = display(item.name ?? fallbackName, limit: 200)
+    // An ordinary address need not have a business name. Use its returned address
+    // as a display label; never invent a place, coordinate or provider identifier.
+    if name.isEmpty && mode == "address" { name = display(address, limit: 200) }
     guard !name.isEmpty, !address.isEmpty else { return nil }
     var location: [String: Any] = ["id": id, "name": name, "address": address,
       "latitude": coordinate.latitude, "longitude": coordinate.longitude,
