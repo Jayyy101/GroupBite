@@ -1,5 +1,5 @@
-// Real autocomplete requires a separately reviewed code change. No environment
-// variable, request header or form prop can enable it in this build.
+// Production autocomplete stays disabled. A separate opt-in development test
+// never enables release requests or changes the server's Taylor-only restriction.
 export const GEOAPIFY_AUTOCOMPLETE_ENABLED: boolean = false;
 
 export const GEOAPIFY_ATTRIBUTION = Object.freeze({
@@ -21,7 +21,7 @@ export type GeoapifyAddressSuggestion = AddressFields & Readonly<{
 export type AddressSuggestion = MockAddressSuggestion | GeoapifyAddressSuggestion;
 export type AddressSearch = (query: string, signal: AbortSignal) => Promise<readonly AddressSuggestion[]>;
 export type AddressSearchErrorKind = "disabled" | "unconfigured" | "invalid_query" | "authentication" |
-    "access_denied" | "account_changed" | "rate_limited" | "unavailable" | "invalid_response" | "cancelled" | "timeout";
+    "access_denied" | "account_changed" | "rate_limited" | "unavailable" | "invalid_response" | "cancelled" | "timeout" | "test_limit";
 
 export class AddressSearchError extends Error {
     constructor(public readonly kind: AddressSearchErrorKind, public readonly retryAfterSeconds?: number) {
@@ -35,6 +35,7 @@ export function addressSearchErrorMessage(error: unknown): string {
     if (!(error instanceof AddressSearchError)) return fallback;
     if (error.kind === "authentication" || error.kind === "account_changed") return "Sign in again to use suggestions, or enter an address manually.";
     if (error.kind === "access_denied") return "Address suggestions are not available for this account. Enter an address manually.";
+    if (error.kind === "test_limit") return "Development test limit reached. Enter an address manually.";
     if (error.kind === "rate_limited") return `Suggestions paused. Wait ${error.retryAfterSeconds ?? 60} seconds before trying again, or enter an address manually.`;
     return fallback;
 }

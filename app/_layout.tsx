@@ -4,7 +4,10 @@ import { AuthProvider } from "@/providers/auth";
 export default function RootLayout() {
   return (
     <AuthProvider>
-      <Stack screenOptions={{ headerShown: false }} />
+      <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="(app)" />
+        <Stack.Screen name="auth" />
+      </Stack>
     </AuthProvider>
   );
 }

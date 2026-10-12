@@ -1,5 +1,11 @@
 # Welcome to your Expo app 👋
 
+GroupBite's current app starts with Supabase authentication and has Home, My
+Places, Add, Groups and Account tabs. See [authentication/navigation checks](docs/auth-navigation.md)
+and the [stabilization and checkpoint audit](docs/stabilization-checkpoint.md).
+The latter records the deployed catalog privacy migration and owner-reported
+Geoapify deployments; historical setup instructions are not a redeployment plan.
+
 This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
 
 ## Get started
@@ -46,6 +52,11 @@ Personal Place create/edit and the editable Add Restaurant / Visit form share
 fictional addresses from `lib/mock-address-search.ts`. Type **Demo** or **Market**
 to see up to five suggestions after three characters and a 400 ms debounce.
 Release builds retain manual address entry and never call the mock search.
+
+Default behavior remains unchanged. An optional Taylor-only iOS development
+test now requires explicit public opt-in settings, a **Search address once**
+press, and a shared three-attempt limit. It never enables release requests.
+See [controlled test instructions](docs/milestone-15-autocomplete.md#controlled-ios-development-test).
 
 Choosing a suggestion fills its sample formatted address and retains its sample
 coordinates only in that form's memory. Editing the address clears the selection.

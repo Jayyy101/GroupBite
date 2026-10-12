@@ -1,5 +1,7 @@
 import { isVisitDate, visitManagementErrorMessage } from "@/lib/restaurant-ui";
 import { isGroupAccessDenied } from "@/lib/group-errors";
+import { accountAccessToken } from "@/lib/account-session";
+import { useAuth } from "@/providers/auth";
 import { supabase } from "@/lib/supabase";
 import { backendStyles as styles } from "@/styles/backend";
 import type { GroupVisit, VisitScope } from "@/types/database";
@@ -17,6 +19,8 @@ type Props = {
 };
 
 export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, onComplete, onAccessDenied }: Props) {
+    const { session } = useAuth();
+    const userId = session?.user.id;
     const [visitedOn, setVisitedOn] = useState(visit.visited_on ?? "");
     const [rating, setRating] = useState(visit.rating);
     const [wouldGoAgain, setWouldGoAgain] = useState(visit.would_go_again);
@@ -32,7 +36,7 @@ export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, 
     }, []);
 
     async function handleSubmit() {
-        if (submitting.current) return;
+        if (!mounted.current || submitting.current) return;
         setError("");
         if (action === "edit" && visitedOn.trim() !== "" && !isVisitDate(visitedOn.trim())) {
             setError("Enter a real visit date as YYYY-MM-DD, or leave it blank.");
@@ -44,6 +48,8 @@ export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, 
         let entryRemoved = false;
         let succeeded = false;
         try {
+            const token = await accountAccessToken(userId);
+            if (!mounted.current) return;
             if (action === "edit") {
                 const result = await supabase.rpc("update_group_visit", {
                     ...scope,
@@ -51,10 +57,10 @@ export function VisitManagement({ visit, scope, action, onCancel, onBusyChange, 
                     visit_rating: rating,
                     visit_would_go_again: wouldGoAgain,
                     visit_notes: notes.trim() || null,
-                });
+                }).setHeader("Authorization", `Bearer ${token}`).retry(false);
                 if (result.error) throw result.error;
             } else {
-                const result = await supabase.rpc("delete_group_visit", scope);
+                const result = await supabase.rpc("delete_group_visit", scope).setHeader("Authorization", `Bearer ${token}`).retry(false);
                 if (result.error) throw result.error;
                 entryRemoved = result.data;
             }

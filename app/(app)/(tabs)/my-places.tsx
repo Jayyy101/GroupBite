@@ -4,7 +4,7 @@ import { backendStyles as styles } from "@/styles/backend";
 import type { PersonalPlace } from "@/types/database";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text } from "react-native";
+import { Platform, Pressable, ScrollView, Text } from "react-native";
 
 export default function MyPlacesScreen() {
     return <PersonalAccess title="My Places">{userId => <MyPlaces key={userId} userId={userId} />}</PersonalAccess>;
@@ -26,11 +26,11 @@ function MyPlaces({ userId }: { userId: string }) {
     }, [userId, refresh]);
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace("/")} style={[styles.secondaryButton, styles.backButton]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
             <Text style={styles.title}>My Places</Text>
             <Text style={styles.message}>Only you can see these saved Places. They belong to your account.</Text>
+            {__DEV__ && Platform.OS === "ios" && <Pressable accessibilityRole="button" onPress={() => router.push("/dev-map")} style={styles.secondaryButton}>
+                <Text style={styles.secondaryText}>View My Places on Map</Text>
+            </Pressable>}
             <Pressable accessibilityRole="button" onPress={() => router.push("/personal-place-form")} style={styles.primaryButton}>
                 <Text style={styles.primaryText}>Add Personal Place</Text>
             </Pressable>

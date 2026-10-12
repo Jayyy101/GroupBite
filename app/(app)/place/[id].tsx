@@ -1,10 +1,15 @@
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import type { Place } from "../../types/place";
-import { deletePlace, getSavedPlaces } from "../../utils/storage";
+import type { Place } from "@/types/place";
+import { deletePlace, getSavedPlaces } from "@/utils/storage";
+import { LegacyAccess } from "@/components/legacy-access";
 
 export default function PlaceDetailScreen() {
+    return <LegacyAccess><LegacyPlaceDetail /></LegacyAccess>;
+}
+
+function LegacyPlaceDetail() {
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
     const [place, setPlace] = useState<Place | undefined>();

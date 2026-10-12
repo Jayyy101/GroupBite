@@ -29,7 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         supabase.auth.getSession().then(({ data, error }) => {
             if (!active || authEventReceived) return;
-            setSession(data.session);
+            setSession(error ? null : data.session);
             if (error) setError("Could not restore your session. Please sign in again.");
             setLoading(false);
         }).catch(() => {

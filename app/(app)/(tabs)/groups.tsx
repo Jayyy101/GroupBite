@@ -1,13 +1,13 @@
-import { authErrorMessage } from "@/lib/auth-errors";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { groupErrorMessage } from "@/lib/group-errors";
+import { accountAccessToken } from "@/lib/account-session";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { Group, JoinRequest } from "@/types/database";
 import { useRouter } from "expo-router";
 import { useIsFocused } from "@react-navigation/native";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, Text, TextInput, View } from "react-native";
 
 export default function GroupsScreen() {
@@ -39,11 +39,9 @@ export default function GroupsScreen() {
 function SignedInGroups({ userId }: { userId: string }) {
     const router = useRouter();
     const [groups, setGroups] = useState<Group[]>([]);
-    const [displayName, setDisplayName] = useState("");
     const [name, setName] = useState("");
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
-    const [signingOut, setSigningOut] = useState(false);
     const [error, setError] = useState("");
     const [loadError, setLoadError] = useState("");
     const [inviteCode, setInviteCode] = useState("");
@@ -51,9 +49,11 @@ function SignedInGroups({ userId }: { userId: string }) {
     const [requestMessage, setRequestMessage] = useState("");
     const [requests, setRequests] = useState<Pick<JoinRequest, "id" | "status" | "requested_at">[]>([]);
     const [refreshVersion, setRefreshVersion] = useState(0);
-    const busy = creating || requesting || signingOut;
+    const busy = creating || requesting;
     const isFocused = useIsFocused();
     const { version: foregroundVersion, isActive } = useForegroundRefresh();
+    const mounted = useRef(false), submitting = useRef(false);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
 
     useEffect(() => {
         setGroups([]);
@@ -67,17 +67,14 @@ function SignedInGroups({ userId }: { userId: string }) {
             pending = true;
             setLoadError("");
             try {
-                const [groupsResult, profileResult, requestsResult] = await Promise.all([
+                const [groupsResult, requestsResult] = await Promise.all([
                     supabase.from("groups").select("*").order("created_at", { ascending: false }),
-                    supabase.from("profiles").select("display_name").eq("id", userId).single(),
                     supabase.from("join_requests").select("id,group_id,status,requested_at").eq("user_id", userId).order("requested_at", { ascending: false }),
                 ]);
                 if (groupsResult.error) throw groupsResult.error;
-                if (profileResult.error) throw profileResult.error;
                 if (requestsResult.error) throw requestsResult.error;
                 if (active) {
                     setGroups(groupsResult.data);
-                    setDisplayName(profileResult.data.display_name);
                     // The group card replaces an approved request once membership is visible.
                     setRequests(requestsResult.data.filter(request =>
                         request.status !== "approved" || !groupsResult.data.some(group => group.id === request.group_id)
@@ -100,27 +97,32 @@ function SignedInGroups({ userId }: { userId: string }) {
     }, [userId, isFocused, isActive, foregroundVersion, refreshVersion]);
 
     async function handleCreate() {
-        if (busy || loading) return;
+        if (!mounted.current || submitting.current || busy || loading) return;
         setError("");
         if (name.trim() === "") {
             setError("Please enter a group name.");
             return;
         }
         setCreating(true);
+        submitting.current = true;
         try {
-            const { error } = await supabase.rpc("create_group", { group_name: name.trim() });
+            const token = await accountAccessToken(userId);
+            if (!mounted.current) return;
+            const { error } = await supabase.rpc("create_group", { group_name: name.trim() }).setHeader("Authorization", `Bearer ${token}`).retry(false);
             if (error) throw error;
+            if (!mounted.current) return;
             setName("");
             setRefreshVersion(value => value + 1);
         } catch {
-            setError("Could not create the group. Check your connection and try again.");
+            if (mounted.current) setError("Could not create the group. Check your connection and try again.");
         } finally {
-            setCreating(false);
+            submitting.current = false;
+            if (mounted.current) setCreating(false);
         }
     }
 
     async function handleRequest() {
-        if (busy || loading) return;
+        if (!mounted.current || submitting.current || busy || loading) return;
         setError("");
         setRequestMessage("");
         if (inviteCode.trim() === "") {
@@ -128,41 +130,27 @@ function SignedInGroups({ userId }: { userId: string }) {
             return;
         }
         setRequesting(true);
+        submitting.current = true;
         try {
-            const { error } = await supabase.rpc("request_group_access", { invite_code: inviteCode.trim() });
+            const token = await accountAccessToken(userId);
+            if (!mounted.current) return;
+            const { error } = await supabase.rpc("request_group_access", { invite_code: inviteCode.trim() }).setHeader("Authorization", `Bearer ${token}`).retry(false);
             if (error) throw error;
+            if (!mounted.current) return;
             setInviteCode("");
             setRequestMessage("Request sent. The Owner must approve it before you can access the group.");
             setRefreshVersion(value => value + 1);
         } catch (error) {
-            setError(groupErrorMessage(error));
+            if (mounted.current) setError(groupErrorMessage(error));
         } finally {
-            setRequesting(false);
-        }
-    }
-
-    async function handleSignOut() {
-        if (busy) return;
-        setError("");
-        setSigningOut(true);
-        try {
-            const { error } = await supabase.auth.signOut({ scope: "local" });
-            if (error) throw error;
-            router.dismissTo("/");
-        } catch (error) {
-            setError(authErrorMessage(error));
-        } finally {
-            setSigningOut(false);
+            submitting.current = false;
+            if (mounted.current) setRequesting(false);
         }
     }
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.canGoBack() ? router.back() : router.replace("/")} style={[styles.secondaryButton, styles.backButton]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
             <Text style={styles.title}>Groups</Text>
-            {displayName !== "" && <Text style={styles.message}>Signed in as {displayName}</Text>}
             <Text style={styles.label}>New group name</Text>
             <TextInput
                 accessibilityLabel="New group name"
@@ -225,9 +213,6 @@ function SignedInGroups({ userId }: { userId: string }) {
             )}
             <Pressable accessibilityRole="button" disabled={busy || loading} onPress={() => setRefreshVersion(value => value + 1)} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>Refresh Groups and Requests</Text>
-            </Pressable>
-            <Pressable accessibilityRole="button" disabled={busy} onPress={handleSignOut} style={styles.secondaryButton}>
-                <Text style={styles.secondaryText}>{signingOut ? "Signing out..." : "Sign Out"}</Text>
             </Pressable>
         </ScrollView>
     );

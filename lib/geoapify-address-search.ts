@@ -1,5 +1,6 @@
 import { AddressSearchError, GEOAPIFY_ATTRIBUTION, GEOAPIFY_AUTOCOMPLETE_ENABLED } from "./address-search";
 import type { AddressSearch, GeoapifyAddressSuggestion } from "./address-search";
+import { consumeGeoapifyDevTestAttempt, geoapifyDevTestConfigured } from "./geoapify-dev-test";
 
 // A getter over the current Auth-provider session, not a decoded JWT or stored
 // token copy. It must reflect sign-out/account changes without making requests.
@@ -60,8 +61,10 @@ export function createGeoapifyAddressSearch(options: Options): AddressSearch {
     const now = options.now ?? Date.now;
     let blockedUntil = 0;
     return async (query, parent) => {
-        // Gate precedes configuration, session lookup and all networking.
-        if (!GEOAPIFY_AUTOCOMPLETE_ENABLED) throw new AddressSearchError("disabled");
+        // Release always stays manual; opt-in dev testing does not flip the gate.
+        // This check precedes configuration, session lookup and all networking.
+        const developmentTest = !GEOAPIFY_AUTOCOMPLETE_ENABLED && geoapifyDevTestConfigured();
+        if (!__DEV__ || (!GEOAPIFY_AUTOCOMPLETE_ENABLED && !developmentTest)) throw new AddressSearchError("disabled");
         if (parent.aborted) throw new AddressSearchError("cancelled");
         query = query.trim();
         if (!text(query, 300) || [...query].length < 3) throw new AddressSearchError("invalid_query");
@@ -93,6 +96,9 @@ export function createGeoapifyAddressSearch(options: Options): AddressSearch {
                     throw new AddressSearchError("authentication");
                 }
                 const userId = session.user.id, token = session.access_token;
+                // Check the current account and spend one local attempt immediately
+                // before Fetch. All adapter instances share this conservative cap.
+                if (developmentTest) consumeGeoapifyDevTestAttempt(userId, controller.signal);
                 const response = await fetcher(endpoint, { method: "POST", redirect: "error", signal: controller.signal,
                     headers: { "Content-Type": "application/json", apikey: options.publishableKey, Authorization: `Bearer ${token}` },
                     body: JSON.stringify({ action: "suggest", query }) });

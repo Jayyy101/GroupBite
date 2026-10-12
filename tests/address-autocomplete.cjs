@@ -329,9 +329,18 @@ async function selectMock(r, clock) { await enter(r, 'Restaurant address', 'Demo
     const realSuggestion = () => ({ ...sample, source: 'geoapify', accuracy: 'building', countryCode: 'us',
         selectionReceipt: 'opaque_payload.' + 'a'.repeat(43), expiresAt: new Date(Date.now() + 600000).toISOString() });
     const realRows = r => nodes(r.output).filter(n => n.type === 'Pressable' && n.props.accessibilityLabel?.startsWith('Use address:'));
+    await test('Release component props and simulated enabled gates cannot display real results or call a provider', async () => {
+        let calls = 0;
+        const f = setup({ development: false, enableGeoapify: true, props: { mode: 'geoapify', manualSearch: true },
+            search: async () => { calls++; return [realSuggestion()]; } });
+        await f.r.settle(); await enter(f.r, 'Restaurant address', '100 Market'); await f.clock.advance(2000, f.r);
+        assert.equal(calls, 0); assert.equal(realRows(f.r).length, 0); assert(input(f.r).props.editable);
+        assert(!textOf(f.r.output).includes('Search address once')); assert(!textOf(f.r.output).includes('Powered by Geoapify'));
+        f.r.unmount();
+    });
     await test('Prepared native real mode uses the authenticated adapter, preserves selection proof and shows safe attribution links', async () => {
         const item = realSuggestion(), calls = [];
-        const f = setup({ development: false, enableGeoapify: true, props: { mode: 'geoapify' }, createSearch: rt =>
+        const f = setup({ development: true, enableGeoapify: true, props: { mode: 'geoapify' }, createSearch: rt =>
             rt.load('@/lib/geoapify-address-search').createGeoapifyAddressSearch({
                 supabaseUrl: 'https://abcdefghijklmnopqrst.supabase.co', publishableKey: 'sb_publishable_test',
                 getSession: () => ({ access_token: 'aaa.e30.signature', user: { id: '11111111-1111-1111-1111-111111111111' } }),

@@ -1,5 +1,6 @@
 import { deadline, HttpError, object, readJson, text, uuid } from "./http.ts";
 import { createReceiptCodec, type VerifiedSelection } from "./receipts.ts";
+import { createDiagnostics } from "./diagnostics.ts";
 
 export type SuggestConfig = {
     supabaseUrl: string;
@@ -9,6 +10,8 @@ export type SuggestConfig = {
     selectionSecret: string;
     // Temporary rollout restriction. Required until explicitly removed in code.
     allowedUserId: string;
+    // Temporary server-only opt-in; never enabled by caller input or native flags.
+    diagnosticsEnabled?: boolean;
 };
 type Dependencies = {
     fetch?: typeof fetch;
@@ -74,6 +77,8 @@ export function createSuggestHandler(settings: SuggestConfig, dependencies: Depe
     let codec: ReturnType<typeof createReceiptCodec> | undefined;
 
     return async (request: Request): Promise<Response> => {
+        let diagnostics: ReturnType<typeof createDiagnostics> | undefined;
+        let providerAbort: "deadline" | "parent_cancelled" | undefined;
         try {
             // Native-only first phase. Browser origins/CORS are deliberately not enabled.
             if (request.headers.has("Origin")) throw new HttpError(403, "origin_not_allowed");
@@ -107,6 +112,8 @@ export function createSuggestHandler(settings: SuggestConfig, dependencies: Depe
             // Compare only the Auth-verified UUID, never a caller claim/name/email.
             // Denied users cannot sign, reserve quota, confirm or contact Geoapify.
             if (userId !== config.allowedUserId) throw new HttpError(403, "access_denied");
+            diagnostics = createDiagnostics(config.diagnosticsEnabled === true, monotonicNow);
+            diagnostics.phase("authorized");
             const signer = await (codec ??= createReceiptCodec(config.selectionSecret, config.supabaseUrl, dependencies.crypto));
             const url = new URL(providerEndpoint);
             url.search = new URLSearchParams({ text: query, filter: "countrycode:us", lang: "en", limit: "5", format: "json" }).toString();
@@ -114,6 +121,7 @@ export function createSuggestHandler(settings: SuggestConfig, dependencies: Depe
             // Start the monotonic budget BEFORE calling the RPC. Admission occurs
             // after this instant, so dispatch within 800ms also precedes the DB's
             // one-second expiry without assuming synchronized Edge/DB wall clocks.
+            diagnostics.phase("admission");
             const reservationStarted = monotonicNow();
             const checkPermit = (expiry: string, signal: AbortSignal) => {
                 const elapsed = monotonicNow() - reservationStarted;
@@ -157,25 +165,36 @@ export function createSuggestHandler(settings: SuggestConfig, dependencies: Depe
                     return row;
                 }, new HttpError(503, "quota_unavailable"));
             } catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "quota_unavailable"); }
+            diagnostics.phase("confirmation_complete");
 
             const providerData = await deadline(request.signal, 5000, async signal => {
+                diagnostics?.phase("provider_headers_wait");
                 // Last synchronous guard immediately before the ONLY provider attempt.
                 // Also abandon wall-clock-expired permits; skew can only deny dispatch.
                 checkPermit(permit.permit_expires_at as string, signal);
                 const response = await fetcher(url, { method: "GET", headers: { "x-api-key": config.geoapifyKey }, redirect: "error", signal });
+                if (!signal.aborted) diagnostics?.phase("provider_headers_received");
                 if (response.status === 429) throw new HttpError(503, "provider_throttled", 60);
                 if (!response.ok) throw new HttpError(502, "provider_unavailable");
+                if (!signal.aborted) diagnostics?.phase("provider_body_read");
                 return readJson(response, 65536, signal);
-            }, new HttpError(504, "provider_timeout"));
+            }, new HttpError(504, "provider_timeout"), reason => { providerAbort = reason; });
+            diagnostics.phase("provider_body_complete");
+            diagnostics.phase("response_processing");
             const verified = selections(providerData);
             const suggestions = await Promise.all(verified.map(async selection => ({ ...selection,
                 ...await signer.sign(userId, selection, now()) })));
             if (request.signal.aborted) throw new HttpError(503, "request_cancelled");
-            return json(200, { suggestions, attribution });
+            const response = json(200, { suggestions, attribution });
+            diagnostics.phase("response_ready");
+            return response;
         } catch (error) {
             const failure = error instanceof HttpError ? error : new HttpError(502, "service_unavailable");
             // Never reflect provider URLs, addresses, JWTs, keys, raw bodies or exception messages.
-            return json(failure.status, { error: { code: failure.code }, manualEntryAllowed: true }, failure.retryAfter);
+            const response = json(failure.status, { error: { code: failure.code }, manualEntryAllowed: true }, failure.retryAfter);
+            diagnostics?.failure(providerAbort ?? (request.signal.aborted ? "parent_cancelled" :
+                error instanceof HttpError ? "handled_error" : "unexpected_error"));
+            return response;
         }
     };
 }

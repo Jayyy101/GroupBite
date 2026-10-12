@@ -1,13 +1,14 @@
 import { authErrorMessage } from "@/lib/auth-errors";
+import { safeAuthReturnTo } from "@/lib/auth-navigation";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
-import { Redirect, useRouter } from "expo-router";
+import { Redirect, useLocalSearchParams, type Href } from "expo-router";
 import { useState } from "react";
 import { Platform, Pressable, ScrollView, Text, TextInput } from "react-native";
 
 export default function AuthScreen() {
-    const router = useRouter();
+    const { returnTo } = useLocalSearchParams<{ returnTo?: string | string[] }>();
     const { session, loading, error: sessionError } = useAuth();
     const [signingUp, setSigningUp] = useState(false);
     const [displayName, setDisplayName] = useState("");
@@ -59,18 +60,11 @@ export default function AuthScreen() {
         }
     }
 
-    if (!loading && session) return <Redirect href="/groups" />;
+    if (!loading && session) return <Redirect href={safeAuthReturnTo(returnTo) as Href} />;
 
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            <Pressable
-                accessibilityRole="button"
-                disabled={busy}
-                onPress={() => router.canGoBack() ? router.back() : router.replace("/")}
-                style={[styles.secondaryButton, styles.backButton]}
-            >
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
+            <Text style={styles.message}>GroupBite</Text>
             <Text style={styles.title}>{signingUp ? "Create Account" : "Sign In"}</Text>
             {loading ? <Text style={styles.message}>Restoring your session...</Text> : (
                 <>

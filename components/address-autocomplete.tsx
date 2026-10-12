@@ -1,6 +1,7 @@
 import { searchMockAddresses } from "@/lib/mock-address-search";
 import { addressSearchErrorMessage, GEOAPIFY_ATTRIBUTION, GEOAPIFY_AUTOCOMPLETE_ENABLED } from "@/lib/address-search";
 import type { AddressSearch, AddressSuggestion } from "@/lib/address-search";
+import { geoapifyDevTestConfigured, GEOAPIFY_DEV_TEST_ATTEMPTS } from "@/lib/geoapify-dev-test";
 import { backendStyles as styles } from "@/styles/backend";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Keyboard, Linking, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
@@ -13,16 +14,19 @@ type Props = {
     active?: boolean;
     resetKey?: string | number;
     mode?: "mock" | "geoapify";
-    // Real mode requires both separate code approval and an authenticated adapter.
+    // Real mode requires a development gate and an authenticated adapter.
     search?: AddressSearch;
+    // Opt-in development test: an explicit button press arms the same debounce.
+    manualSearch?: boolean;
 };
 type Results = { query: string; generation: number; items: readonly AddressSuggestion[] };
 
 export function AddressAutocomplete({ value, selection, onChange, editable, active = true, resetKey,
-    mode = "mock", search }: Props) {
+    mode = "mock", search, manualSearch = false }: Props) {
     const real = mode === "geoapify";
     const provider = real ? search : search ?? searchMockAddresses;
-    const enabled = editable && active && (real ? GEOAPIFY_AUTOCOMPLETE_ENABLED && !!provider : __DEV__);
+    const realEnabled = __DEV__ && (GEOAPIFY_AUTOCOMPLETE_ENABLED || geoapifyDevTestConfigured());
+    const enabled = editable && active && (real ? realEnabled && !!provider : __DEV__);
     // Only an explicit text edit starts a query. Loading/focusing an existing
     // address, or selecting a result, never initiates an automatic lookup.
     const [query, setQuery] = useState<{ text: string } | null>(null);
@@ -47,7 +51,7 @@ export function AddressAutocomplete({ value, selection, onChange, editable, acti
     useEffect(() => {
         cancel();
         return invalidate;
-    }, [active, editable, resetKey, mode, provider, cancel, invalidate]);
+    }, [active, editable, resetKey, mode, provider, manualSearch, cancel, invalidate]);
     useEffect(() => {
         if (query !== null && query.text !== value) { cancel(); return; }
         if (!enabled || !provider || query === null) return;
@@ -77,7 +81,7 @@ export function AddressAutocomplete({ value, selection, onChange, editable, acti
         cancel();
         // Clear hidden coordinates even when a user retypes the same address.
         onChange(text, null);
-        if (enabled && [...text.trim()].length >= 3) setQuery({ text });
+        if (enabled && !manualSearch && [...text.trim()].length >= 3) setQuery({ text });
     }
     function choose(item: AddressSuggestion, displayed: Results) {
         if (!editable || !active || displayed.generation !== generation.current || displayed.query !== value) return;
@@ -92,10 +96,18 @@ export function AddressAutocomplete({ value, selection, onChange, editable, acti
     return (
         <View>
             <TextInput accessibilityLabel="Restaurant address"
-                accessibilityHint={enabled ? `Type at least three characters for ${real ? "address" : "mock"} suggestions, or enter an address manually.` : "Enter the full address, including city."}
+                accessibilityHint={enabled ? manualSearch ? "Enter at least three characters, then tap Search address once, or enter the full address manually." : `Type at least three characters for ${real ? "address" : "mock"} suggestions, or enter an address manually.` : "Enter the full address, including city."}
                 value={value} onChangeText={edit} onBlur={cancel} onSubmitEditing={cancel}
                 maxLength={300} editable={editable} autoCorrect={false} autoComplete="off" returnKeyType="done"
                 placeholder="Full address, including city" placeholderTextColor="#79665E" style={styles.input} />
+            {real && realEnabled && manualSearch && <>
+                <Text style={localStyles.help}>Development Geoapify test: explicit searches only; {GEOAPIFY_DEV_TEST_ATTEMPTS} attempts total in this app run. Manual entry always works.</Text>
+                <Pressable accessibilityRole="button" disabled={!enabled || query !== null || [...value.trim()].length < 3}
+                    onPress={() => {
+                        if (!enabled || query !== null || [...value.trim()].length < 3) return;
+                        cancel(); setQuery({ text: value });
+                    }} style={localStyles.suggestion}><Text style={styles.cardTitle}>Search address once</Text></Pressable>
+            </>}
             {!real && __DEV__ && editable && <Text style={localStyles.help}>Development only: fictional mock addresses. You can always enter an address manually.</Text>}
             {enabled && selection?.address === value && <Text style={localStyles.help}>{real ? "Address selected." : "Mock address selected."}</Text>}
             {enabled && status === "searching" && <Text accessibilityLiveRegion="polite" style={localStyles.help}>{real ? "Searching addresses..." : "Searching mock addresses..."}</Text>}
@@ -108,7 +120,7 @@ export function AddressAutocomplete({ value, selection, onChange, editable, acti
                     <Text style={styles.cardTitle}>{item.address}</Text>
                 </Pressable>)}
             </View>}
-            {real && GEOAPIFY_AUTOCOMPLETE_ENABLED && (status === "ready" || (selection?.source === "geoapify" && selection.address === value)) && <Text style={localStyles.help}>
+            {real && realEnabled && (status === "ready" || (selection?.source === "geoapify" && selection.address === value)) && <Text style={localStyles.help}>
                 <Text accessibilityRole="link" onPress={() => { void Linking.openURL(GEOAPIFY_ATTRIBUTION.geoapifyUrl).catch(() => {}); }}>Powered by Geoapify</Text>
                 {" | "}<Text accessibilityRole="link" onPress={() => { void Linking.openURL(GEOAPIFY_ATTRIBUTION.openStreetMapUrl).catch(() => {}); }}>© OpenStreetMap contributors</Text>
             </Text>}

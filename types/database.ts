@@ -146,6 +146,27 @@ export type SaveVisitArgs = {
     visit_notes?: string | null;
 };
 
+export type SavedLocation = {
+    saved_kind: "personal" | "group";
+    saved_id: string;
+    restaurant_id: string | null;
+    group_id: string | null;
+    group_name: string | null;
+    name: string;
+    address: string;
+    cuisine: string | null;
+    latitude: number | null;
+    longitude: number | null;
+    resolution_status: "unresolved" | "resolved" | "failed" | "ambiguous";
+    standardized_address: string | null;
+    resolution_accuracy: "building" | "address" | null;
+    distance_meters: number | null;
+    personal_rating: number | null;
+    group_average_rating: number | null;
+    rated_visit_count: number | null;
+    total_visit_count: number | null;
+};
+
 // Types for the applied schema; database permissions restrict writes.
 export type Database = {
     public: {
@@ -213,6 +234,15 @@ export type Database = {
         };
         Views: { [_ in never]: never };
         Functions: {
+            get_saved_locations: { Args: {
+                scope?: "all" | "personal" | "group";
+                target_group_id?: string | null;
+                center_latitude?: number | null;
+                center_longitude?: number | null;
+                radius_meters?: number | null;
+                page_size?: number;
+                page_offset?: number;
+            }; Returns: SavedLocation[] };
             create_group: { Args: { group_name: string }; Returns: Group };
             generate_group_invite: { Args: { target_group_id: string }; Returns: string };
             revoke_group_invite: { Args: { target_group_id: string }; Returns: undefined };

@@ -1,5 +1,14 @@
 # Milestone 15: local Geoapify suggestion runtime verification
 
+**Deployment reconciliation (owner report 2026-10-11):** this function and
+`geoapify-attach-personal` are already deployed. Exact deployed source versions
+remain unverified. Migration 11 was applied through SQL Editor and its
+service-role-only RPC permissions were verified. Migration 12 is deployed and its
+production privacy checks passed. This README describes the
+local source contract; its old setup sequence below is historical, not an
+instruction to reapply migrations, redeploy, or alter secrets. See the
+[checkpoint audit](../../../docs/stabilization-checkpoint.md).
+
 Source, offline tests and isolated Deno/PostgREST runtime tests. The app still uses
 mock suggestions and its existing saves. No real credentials, deployment,
 coordinate attachment or edits to migrations 1–9. Migration 10 adds only a private
@@ -220,7 +229,7 @@ in-flight dispatches have stopped. Leave Supabase keys, signing configuration,
 migrations, committed quota rows and existing saves intact. Never refund usage or
 expand limits to recover a failed test.
 
-After separate approval:
+Historical first-deployment checklist (do not replay for the existing deployments):
 
 1. Obtain approved Deno/Supabase CLI tooling. This checkout has no CLI config;
    initialize it only in a later approved setup. Run Deno checking and isolated
@@ -229,9 +238,9 @@ After separate approval:
    enrollment/automatic upgrades, plus an independent random signing secret.
    Configure server secrets through an approved secure workflow such as Dashboard,
    never committed files or mobile settings. This change creates none.
-3. Verify the existing migration state; do not rerun migrations 1–9. Apply only
-   `migrations/20261010001000_geoapify_admission_confirmation.sql` once after
-   Migration 9, using an approved migration workflow. Verify the new RPC is
+3. Reconcile the existing migration state before considering any change; do not
+   rerun historical migrations 1–11. Migration 10 introduced the confirmation
+   RPC. A separately approved read-only check can verify the RPC is
    visible to PostgREST, executable only by `service_role`, and that table grants
    remain revoked. No transaction-override setting is required.
 4. With Geoapify still disabled and provider Fetch intercepted by a controlled
@@ -242,8 +251,8 @@ After separate approval:
    COMMITTED admission isolation through the approved secure workflow. Keep gateway
    `verify_jwt=true` (default); do not use `--no-verify-jwt`. Auth-server verification
    remains mandatory. [Gateway guidance](https://supabase.com/docs/guides/functions/auth-headers).
-5. Only when authorized, deploy with the explicit approved project reference:
-   `supabase functions deploy geoapify-suggest --project-ref <approved-project-ref>`.
+5. Preserve the already deployed function. Any future source/version change needs
+   a separate deployment review; no redeployment is part of this checkpoint.
 6. Test invalid/expired tokens, quota/dispatch boundaries, real US coverage,
    failures, attribution, key redaction, receipt tampering/expiry/account isolation
    and gateway behavior with disposable accounts. UI/attachment require a later phase.

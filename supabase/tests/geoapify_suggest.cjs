@@ -53,7 +53,7 @@ function setup(options = {}) {
     const load = modules(options.globals), calls = [], signals = [];
     let mono = 0, now = baseTime;
     const handler = load('handler.ts').createSuggestHandler({ ...config, ...options.config }, {
-        now: () => now, monotonicNow: () => mono, crypto: webcrypto,
+        now: () => now, monotonicNow: () => mono, crypto: options.crypto ?? webcrypto,
         fetch: async (input, init) => {
             const url = new URL(input); const call = { url, init }; calls.push(call); signals.push(init.signal);
             for (const value of [config.geoapifyKey, config.anonKey, config.serviceRoleKey, config.selectionSecret, tokenA, tokenB]) {
@@ -120,12 +120,38 @@ function timerControl() {
         }, get size() { return timers.size; } };
 }
 async function until(predicate) { for (let i = 0; i < 40 && !predicate(); i++) await new Promise(resolve => setImmediate(resolve)); assert(predicate()); }
+function diagnosticFixture(options = {}) {
+    const logs = [];
+    const console = Object.fromEntries(['log', 'info', 'warn', 'error', 'debug', 'trace']
+        .map(method => [method, (...args) => logs.push({ method, args })]));
+    const f = setup({ ...options, config: { diagnosticsEnabled: true, ...options.config }, globals: { console, ...options.globals } });
+    return { ...f, logs, records() {
+        return logs.map(({ method, args }) => {
+            assert.equal(method, 'info'); assert.equal(args.length, 1); assert.equal(typeof args[0], 'string');
+            const row = JSON.parse(args[0]);
+            assert.deepEqual(Object.keys(row).sort(), ['diagnostic', 'invocation', 'event', 'phase', 'elapsed_ms',
+                ...(row.event === 'failure' ? ['outcome'] : [])].sort());
+            assert.equal(row.diagnostic, 'geoapify_suggest_v1');
+            assert.match(row.invocation, /^[0-9a-f-]{36}$/);
+            assert(['phase', 'failure'].includes(row.event));
+            assert(['authorized', 'admission', 'confirmation_complete', 'provider_headers_wait', 'provider_headers_received',
+                'provider_body_read', 'provider_body_complete', 'response_processing', 'response_ready'].includes(row.phase));
+            if (row.event === 'failure') assert(['deadline', 'parent_cancelled', 'handled_error', 'unexpected_error'].includes(row.outcome));
+            assert(Number.isSafeInteger(row.elapsed_ms) && row.elapsed_ms >= 0 && row.elapsed_ms <= 86400000);
+            for (const privateValue of [config.geoapifyKey, config.selectionSecret, config.serviceRoleKey, config.anonKey, tokenA, tokenB,
+                userA, userB, admission()[0].admission_id, '100 Market', building().formatted, building().place_id,
+                'http:', 'https:', 'Authorization', 'x-api-key', 'selectionReceipt']) assert(!args[0].includes(privateValue));
+            return row;
+        });
+    } };
+}
 
 (async () => {
     await test('Real entry point reads only named server secrets and registers the isolated handler', async () => {
         const read = []; let handler;
         const secrets = { SUPABASE_URL: config.supabaseUrl, SUPABASE_ANON_KEY: config.anonKey, SUPABASE_SERVICE_ROLE_KEY: config.serviceRoleKey,
-            GEOAPIFY_API_KEY: config.geoapifyKey, GEOAPIFY_SELECTION_SECRET: config.selectionSecret, GEOAPIFY_ALLOWED_USER_ID: userA };
+            GEOAPIFY_API_KEY: config.geoapifyKey, GEOAPIFY_SELECTION_SECRET: config.selectionSecret, GEOAPIFY_ALLOWED_USER_ID: userA,
+            GEOAPIFY_DIAGNOSTICS_ENABLED: undefined };
         modules({ Deno: { env: { get(name) { read.push(name); return secrets[name]; } }, serve(value) { handler = value; } } })('index.ts');
         assert.deepEqual(read, Object.keys(secrets)); assert.equal(typeof handler, 'function');
         await error(await handler(request({}, { method: 'GET', body: undefined })), 405, 'method_not_allowed');
@@ -480,6 +506,143 @@ async function until(predicate) { for (let i = 0; i < 40 && !predicate(); i++) a
             await error(await f.handler(request({ action, query: '100 Market' })), 400, 'invalid_request');
         }
         assert.equal(f.calls.length, 0);
+    });
+    await test('Diagnostics are off by default and caller flags cannot enable them', async () => {
+        for (const diagnosticsEnabled of [undefined, false, 'true', 'TRUE', 1]) {
+            const f = diagnosticFixture({ config: { diagnosticsEnabled } });
+            assert.equal((await f.handler(request(undefined, { headers: { 'Content-Type': 'application/json',
+                Authorization: `Bearer ${tokenA}`, 'X-Geoapify-Diagnostics': 'true' } }))).status, 200);
+            assert.deepEqual(f.logs, []);
+        }
+        const f = diagnosticFixture();
+        await error(await f.handler(request({ action: 'suggest', query: '100 Market', diagnosticsEnabled: true })), 400, 'invalid_request');
+        assert.equal(f.calls.length, 0); assert.deepEqual(f.logs, []);
+    });
+    await test('Real entry point enables diagnostics only for the exact server opt-in value', async () => {
+        for (const flag of [undefined, 'true', 'TRUE', 'false', '1', ' true ']) {
+            let handler; const logs = [];
+            modules({ console: { info: raw => logs.push(JSON.parse(raw)) }, Deno: {
+                env: { get: name => ({ SUPABASE_URL: config.supabaseUrl, SUPABASE_ANON_KEY: config.anonKey,
+                    SUPABASE_SERVICE_ROLE_KEY: config.serviceRoleKey, GEOAPIFY_API_KEY: config.geoapifyKey,
+                    GEOAPIFY_SELECTION_SECRET: config.selectionSecret, GEOAPIFY_ALLOWED_USER_ID: userA,
+                    GEOAPIFY_DIAGNOSTICS_ENABLED: flag })[name] }, serve: value => { handler = value; } },
+                fetch: async input => {
+                    const url = new URL(input);
+                    if (url.pathname === '/auth/v1/user') return reply({ id: userA, role: 'authenticated' });
+                    if (url.pathname.endsWith('/reserve_geoapify_request')) return reply(admission({ permit_expires_at: new Date(Date.now() + 1000).toISOString() }));
+                    if (url.pathname.endsWith('/confirm_geoapify_request')) return reply(true);
+                    assert.equal(url.origin, 'https://api.geoapify.com'); return reply({ results: [] });
+                } })('index.ts');
+            assert.equal((await handler(request())).status, 200);
+            assert.equal(logs.length, flag === 'true' ? 9 : 0);
+        }
+    });
+    await test('Unauthorized and wrong-user requests emit no diagnostics or provider calls', async () => {
+        for (const kind of ['missing', 'wrong-user', 'unverified']) {
+            const f = diagnosticFixture({ fetch: c => kind === 'unverified' && c.url.pathname === '/auth/v1/user' ? reply({}, 401) : null });
+            const req = request(undefined, { headers: { 'Content-Type': 'application/json',
+                ...(kind === 'missing' ? {} : { Authorization: `Bearer ${kind === 'wrong-user' ? tokenB : tokenA}` }) } });
+            await error(await f.handler(req), kind === 'wrong-user' ? 403 : 401, kind === 'wrong-user' ? 'access_denied' : 'unauthorized');
+            assert.deepEqual(f.logs, []); assert.equal(f.reservations().length, 0); assert.equal(f.providers().length, 0);
+        }
+    });
+    await test('Successful diagnostic phases preserve responses and expose only a random ID and bounded timings', async () => {
+        const f = diagnosticFixture({ fetch: (c, clock) => {
+            if (c.url.pathname.endsWith('/reserve_geoapify_request')) clock.setMono(200);
+            if (c.url.pathname.endsWith('/confirm_geoapify_request')) clock.setMono(400);
+            if (c.url.origin === 'https://api.geoapify.com') clock.setMono(600);
+        } });
+        const response = await f.handler(request()), data = await response.json(); assert.equal(response.status, 200);
+        const records = f.records();
+        assert.deepEqual(records.map(r => r.phase), ['authorized', 'admission', 'confirmation_complete', 'provider_headers_wait',
+            'provider_headers_received', 'provider_body_read', 'provider_body_complete', 'response_processing', 'response_ready']);
+        assert.equal(new Set(records.map(r => r.invocation)).size, 1); assert.equal(records.at(-1).elapsed_ms, 600);
+        assert(!JSON.stringify(f.logs).includes(data.suggestions[0].selectionReceipt));
+        assert(!JSON.stringify(data).includes(records[0].invocation)); assert(!JSON.stringify([...response.headers]).includes(records[0].invocation));
+        assert.equal(f.reservations().length, 1); assert.equal(f.confirmations().length, 1); assert.equal(f.providers().length, 1);
+    });
+    for (const body of [false, true]) {
+        await test(`Diagnostics identify a ${body ? 'body' : 'headers'} deadline and suppress late completion`, async () => {
+            const timers = timerControl(); let resolve;
+            const held = new Promise(r => { resolve = r; });
+            const stream = new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode('{')); } });
+            const f = diagnosticFixture({ globals: { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout },
+                fetch: c => c.url.origin === 'https://api.geoapify.com' ? body ? new Response(stream, { headers: { 'Content-Type': 'application/json' } }) : held : null });
+            const parent = new AbortController(), pending = f.handler(request(undefined, { signal: parent.signal }));
+            await until(() => body ? stream.locked : f.providers().length === 1);
+            f.setMono(5500); timers.fire(5000); parent.abort(); // The first cause stays deadline, despite a later cancellation.
+            await error(await pending, 504, 'provider_timeout');
+            const records = f.records(), last = records.at(-1), count = records.length;
+            assert.equal(last.phase, body ? 'provider_body_read' : 'provider_headers_wait'); assert.equal(last.outcome, 'deadline');
+            assert.equal(last.elapsed_ms, 5500); resolve(reply({ results: [building()] }));
+            await new Promise(r => setImmediate(r)); assert.equal(f.records().length, count); assert.equal(timers.size, 0);
+            assert.equal(f.providers().length, 1); assert.equal(f.reservations().length, 1); assert(f.signals.at(-1).aborted);
+        });
+        await test(`Diagnostics distinguish parent cancellation during provider ${body ? 'body' : 'headers'}`, async () => {
+            const timers = timerControl(), stream = new ReadableStream({ start() {} });
+            const f = diagnosticFixture({ globals: { setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout },
+                fetch: c => c.url.origin === 'https://api.geoapify.com' ? body ? new Response(stream, { headers: { 'Content-Type': 'application/json' } }) : new Promise(() => {}) : null });
+            const parent = new AbortController(), pending = f.handler(request(undefined, { signal: parent.signal }));
+            await until(() => body ? stream.locked : f.providers().length === 1); parent.abort();
+            await error(await pending, 504, 'provider_timeout'); const last = f.records().at(-1);
+            assert.equal(last.phase, body ? 'provider_body_read' : 'provider_headers_wait'); assert.equal(last.outcome, 'parent_cancelled');
+            assert.equal(f.providers().length, 1); assert.equal(f.reservations().length, 1); assert.equal(timers.size, 0);
+        });
+    }
+    await test('Transport, HTTP, JSON validation and receipt processing failures never log private exception or response data', async () => {
+        const privateDetails = [config.geoapifyKey, tokenA, building().formatted, config.supabaseUrl, 'Authorization', 'selectionReceipt'].join(' ');
+        for (const kind of ['transport', 'http', 'json', 'shape', 'sign']) {
+            const crypto = kind === 'sign' ? { subtle: { importKey: webcrypto.subtle.importKey.bind(webcrypto.subtle),
+                sign() { throw new Error(privateDetails); } } } : webcrypto;
+            const f = diagnosticFixture({ crypto, fetch: c => {
+                if (c.url.origin !== 'https://api.geoapify.com') return null;
+                if (kind === 'transport') throw new Error(privateDetails);
+                if (kind === 'http') return reply({ message: privateDetails }, 500);
+                if (kind === 'json') return new Response(privateDetails, { headers: { 'Content-Type': 'application/json' } });
+                if (kind === 'shape') return reply({ message: privateDetails });
+            } });
+            await error(await f.handler(request()), 502, ['http', 'shape'].includes(kind) ? 'provider_unavailable' : 'service_unavailable');
+            const last = f.records().at(-1);
+            assert.equal(last.phase, ({ transport: 'provider_headers_wait', http: 'provider_headers_received', json: 'provider_body_read',
+                shape: 'response_processing', sign: 'response_processing' })[kind]);
+            assert.equal(last.outcome, ['http', 'shape'].includes(kind) ? 'handled_error' : 'unexpected_error');
+            assert.equal(f.providers().length, 1); assert.equal(f.reservations().length, 1);
+        }
+    });
+    await test('Missing confirmation still fails closed and diagnostic overhead cannot extend the 800ms admission budget', async () => {
+        const missing = diagnosticFixture({ fetch: c => c.url.pathname.endsWith('/confirm_geoapify_request') ? reply(false) : null });
+        await error(await missing.handler(request()), 503, 'quota_unavailable');
+        assert.equal(missing.records().at(-1).phase, 'admission'); assert.equal(missing.providers().length, 0);
+        let f;
+        f = diagnosticFixture({ globals: { console: { info(raw) {
+            if (JSON.parse(raw).phase === 'confirmation_complete') f.setMono(800);
+        } } } });
+        await error(await f.handler(request()), 503, 'permit_expired'); assert.equal(f.providers().length, 0);
+        assert.equal(f.confirmations().length, 1);
+    });
+    await test('Diagnostic logger or ID creation failure cannot affect responses, quota enforcement or retry behavior', async () => {
+        for (const globals of [{ console: { info() { throw new Error(tokenA); } } },
+            { crypto: { randomUUID() { throw new Error(config.geoapifyKey); } } }]) {
+            const f = diagnosticFixture({ globals }); assert.equal((await f.handler(request())).status, 200);
+            assert.equal(f.providers().length, 1); assert.equal(f.reservations().length, 1);
+        }
+    });
+    await test('Concurrent diagnostic invocations have independent random IDs and phases', async () => {
+        const f = diagnosticFixture(), responses = await Promise.all([f.handler(request()), f.handler(request())]);
+        assert(responses.every(r => r.status === 200)); const records = f.records(), ids = new Set(records.map(r => r.invocation));
+        assert.equal(ids.size, 2);
+        for (const id of ids) { const own = records.filter(r => r.invocation === id); assert.equal(own.length, 9); assert.equal(own.at(-1).phase, 'response_ready'); }
+        assert.equal(f.providers().length, 2); assert.equal(f.reservations().length, 2);
+    });
+    await test('Deadline observer cannot override enforcement and reports an already-cancelled parent safely', async () => {
+        const timers = timerControl(), load = modules({ setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout });
+        const { deadline, HttpError } = load('http.ts'), failure = new HttpError(504, 'provider_timeout');
+        const pending = deadline(new AbortController().signal, 5000, () => new Promise(() => {}), failure, () => { throw new Error(tokenA); });
+        timers.fire(5000); await assert.rejects(pending, e => e === failure); assert.equal(timers.size, 0);
+        const parent = new AbortController(); parent.abort(); const reasons = [];
+        await assert.rejects(deadline(parent.signal, 5000, () => assert.fail('Cancelled operation ran'), failure,
+            reason => reasons.push(reason)), e => e === failure);
+        assert.deepEqual(reasons, ['parent_cancelled']); assert.equal(timers.size, 0);
     });
     console.log(passed + ' offline Geoapify Edge Function checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

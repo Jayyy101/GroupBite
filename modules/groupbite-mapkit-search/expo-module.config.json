@@ -1,0 +1,4 @@
+{
+  "platforms": ["apple"],
+  "apple": { "modules": ["GroupBiteMapKitSearchModule"], "debugOnly": true }
+}

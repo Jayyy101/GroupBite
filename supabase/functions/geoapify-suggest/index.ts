@@ -14,4 +14,5 @@ runtime.serve(createSuggestHandler({
     geoapifyKey: runtime.env.get("GEOAPIFY_API_KEY") ?? "",
     selectionSecret: runtime.env.get("GEOAPIFY_SELECTION_SECRET") ?? "",
     allowedUserId: runtime.env.get("GEOAPIFY_ALLOWED_USER_ID") ?? "",
+    diagnosticsEnabled: runtime.env.get("GEOAPIFY_DIAGNOSTICS_ENABLED") === "true",
 }));

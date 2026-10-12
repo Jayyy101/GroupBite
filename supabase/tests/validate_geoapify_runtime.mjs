@@ -78,7 +78,9 @@ async function main() {
         grant usage on schema auth to anon,authenticated,service_role;
         alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
         alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;`);
-    const migrations = (await fs.readdir(path.join(root, 'migrations'))).filter(file => file.endsWith('.sql')).sort(); assert.equal(migrations.length, 10);
+    // This admission/provider runner deliberately covers migrations 1–10.
+    // Personal attachment's additive migration has its own isolated SQL suite.
+    const migrations = (await fs.readdir(path.join(root, 'migrations'))).filter(file => file.endsWith('.sql')).sort().slice(0, 10); assert.equal(migrations.length, 10);
     for (const file of migrations.slice(0, 8)) await admin.query(await source('migrations/' + file));
     for (const id of [owner, member, other, userA, userB]) await admin.query("insert into auth.users values($1,'{\"display_name\":\"Runtime fixture\"}')", [id]);
     await admin.query('begin; set local role authenticated');

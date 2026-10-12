@@ -1,4 +1,5 @@
 import { AddressAutocomplete } from "@/components/address-autocomplete";
+import { accountAccessToken } from "@/lib/account-session";
 import type { AddressSuggestion } from "@/lib/address-search";
 import { isUuid, isVisitDate, restaurantErrorMessage } from "@/lib/restaurant-ui";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
@@ -11,14 +12,14 @@ import type { Group, SaveVisitArgs } from "@/types/database";
 import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 export default function AddVisitScreen() {
     const router = useRouter();
     const { groupId, restaurantId } = useLocalSearchParams<{ groupId?: string; restaurantId?: string }>();
     const { session, loading } = useAuth();
     if (!loading && session) {
-        return <VisitForm key={`${session.user.id}:${groupId}:${restaurantId}`} groupId={groupId} restaurantId={restaurantId} />;
+        return <VisitForm key={`${session.user.id}:${groupId}:${restaurantId}`} userId={session.user.id} groupId={groupId} restaurantId={restaurantId} />;
     }
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -36,7 +37,7 @@ export default function AddVisitScreen() {
     );
 }
 
-function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?: string }) {
+function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?: string; restaurantId?: string }) {
     const router = useRouter();
     const autocomplete = useAddressSearch();
     const [name, setName] = useState("");
@@ -56,8 +57,15 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
     const [saving, setSaving] = useState(false);
     const [refreshVersion, setRefreshVersion] = useState(0);
     const lastSubmission = useRef<{ payload: string; requestId: string } | null>(null);
+    const mounted = useRef(false), submitting = useRef(false), visible = useRef(false);
     const isFocused = useIsFocused();
     const { version: foregroundVersion, isActive } = useForegroundRefresh();
+
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+    useEffect(() => {
+        visible.current = isFocused && isActive;
+        return () => { visible.current = false; };
+    }, [isFocused, isActive]);
 
     useEffect(() => {
         setAddressSelection(null);
@@ -107,7 +115,7 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
     }, [restaurantId, refreshVersion, isFocused, isActive, foregroundVersion]);
 
     async function handleSave() {
-        if (saving || loading || loadError !== "") return;
+        if (!mounted.current || !visible.current || AppState.currentState !== "active" || submitting.current || saving || loading || loadError !== "") return;
         setError("");
         if (!name.trim() || !address.trim()) {
             setError("Please enter a restaurant name and address.");
@@ -136,13 +144,17 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             // This is a retry identifier, not a secret or an access token.
             lastSubmission.current = { payload, requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
         }
+        submitting.current = true;
         setSaving(true);
         try {
+            const token = await accountAccessToken(userId);
+            if (!mounted.current) return;
             const { error } = await supabase.rpc("save_restaurant_visit", {
                 ...details, client_request_id: lastSubmission.current.requestId,
-            });
+            }).setHeader("Authorization", `Bearer ${token}`).retry(false);
             if (error) throw error;
         } catch (error) {
+            if (!mounted.current) return;
             setError(restaurantErrorMessage(error));
             if (isGroupAccessDenied(error)) {
                 setGroups([]);
@@ -150,8 +162,10 @@ function VisitForm({ groupId, restaurantId }: { groupId?: string; restaurantId?:
             }
             return;
         } finally {
-            setSaving(false);
+            submitting.current = false;
+            if (mounted.current) setSaving(false);
         }
+        if (!mounted.current || !visible.current || AppState.currentState !== "active") return;
         if (selectedGroups.length === 1) {
             router.dismissTo({ pathname: "/group/[id]", params: { id: selectedGroups[0] } });
         } else {

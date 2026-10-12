@@ -1,0 +1,7 @@
+{
+  "name": "groupbite-mapkit-search",
+  "version": "0.1.0",
+  "private": true,
+  "main": "index.ts",
+  "description": "Development-only native Apple Maps search preview"
+}

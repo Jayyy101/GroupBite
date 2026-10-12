@@ -18,21 +18,33 @@ export const uuid = (value: unknown): value is string => typeof value === "strin
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
 
 export async function deadline<T>(parent: AbortSignal, ms: number,
-    operation: (signal: AbortSignal) => Promise<T>, error: HttpError): Promise<T> {
+    operation: (signal: AbortSignal) => Promise<T>, error: HttpError,
+    onAbort?: (reason: "deadline" | "parent_cancelled") => void): Promise<T> {
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
     let rejectAbort: (error: HttpError) => void = () => {};
-    const abort = () => { controller.abort(); rejectAbort(error); };
+    let aborted = false;
+    const abort = (reason: "deadline" | "parent_cancelled") => {
+        if (aborted) return;
+        aborted = true;
+        try { onAbort?.(reason); } catch { /* Observers cannot change deadline enforcement. */ }
+        controller.abort(); rejectAbort(error);
+    };
+    const parentAbort = () => abort("parent_cancelled");
     const cancelled = new Promise<never>((_, reject) => { rejectAbort = reject; });
-    parent.addEventListener("abort", abort, { once: true });
+    parent.addEventListener("abort", parentAbort, { once: true });
     try {
-        if (parent.aborted) throw error;
-        timer = setTimeout(abort, ms);
+        if (parent.aborted) {
+            // Do not reject the unused race promise for an already-cancelled parent.
+            try { onAbort?.("parent_cancelled"); } catch { /* Observer only. */ }
+            throw error;
+        }
+        timer = setTimeout(() => abort("deadline"), ms);
         // Race even if the transport ignores abort; late results never enter the handler.
         return await Promise.race([Promise.resolve().then(() => operation(controller.signal)), cancelled]);
     } finally {
         clearTimeout(timer);
-        parent.removeEventListener("abort", abort);
+        parent.removeEventListener("abort", parentAbort);
         controller.abort();
     }
 }

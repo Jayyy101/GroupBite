@@ -1,10 +1,15 @@
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
-import type { Place } from "../types/place";
-import { getSavedPlaces } from "../utils/storage";
+import type { Place } from "@/types/place";
+import { getSavedPlaces } from "@/utils/storage";
+import { LegacyAccess } from "@/components/legacy-access";
 
 export default function SavedPlacesScreen() {
+    return <LegacyAccess><LegacySavedPlaces /></LegacyAccess>;
+}
+
+function LegacySavedPlaces() {
     const router = useRouter();
     const [places, setPlaces] = useState<Place[]>([]);
     const [error, setError] = useState("");
@@ -34,7 +39,7 @@ export default function SavedPlacesScreen() {
         <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
             <Pressable
                 accessibilityRole="button"
-                onPress={() => router.back()}
+                onPress={() => router.canGoBack() ? router.back() : router.replace("/account")}
                 style={styles.backButton}
             >
                 <Text style={styles.backButtonText}>Back</Text>

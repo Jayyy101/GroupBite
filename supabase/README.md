@@ -1,10 +1,19 @@
 # Milestone 8 setup
 
-Milestone 15 now includes a **local-only** authenticated Geoapify suggestion
-function. Its [contract, server secrets, validation and later deployment steps](functions/geoapify-suggest/README.md)
-are documented separately. The mobile UI still uses mock suggestions; saves,
-date fields, coordinate attachment and migrations 1–9 are unchanged. Additive
-Migration 10 introduces only service-role committed-admission confirmation.
+**Current status, owner report 2026-10-11:** `geoapify-suggest` and
+`geoapify-attach-personal` are already deployed. Their exact deployed source
+versions remain unverified. Migration 11 was applied through SQL Editor and its
+service-role-only RPC permissions were verified. Migration 12 is deployed and its
+production privacy checks passed. These are owner-reported results; this final
+checkpoint review made no hosted calls. Preserve migrations 1–12;
+do not reapply them or redeploy functions from these historical instructions.
+Do not reapply Migration 12. Reconcile SQL Editor migration history before any
+future CLI migration operations. See the
+[checkpoint audit](../docs/stabilization-checkpoint.md) for the current plan.
+
+The milestone sections below describe historical schema contracts. In particular,
+Migration 12 supersedes global Restaurant visibility/reuse. Geoapify contracts
+and offline verification remain documented in the respective function READMEs.
 
 1. Keep the real `.env` local. `.env.example` lists the two required variables with blank values. Use the project's **publishable** key, never a secret or service-role key.
 2. In the Supabase project dashboard, open **SQL Editor → New query**. Paste the complete contents of `migrations/20261004000100_backend_foundation.sql` and click **Run** once. This versioned migration is a transaction; it creates only profiles, groups, memberships, and their supporting policies/functions/trigger. If you already applied it, do not run it again.
@@ -232,7 +241,7 @@ The runner executes all eight transactional SQL suites, the three original save/
 
 ## Milestone 15 Phase 3: local autocomplete backend groundwork
 
-Migration 9 (`migrations/20261009000900_address_autocomplete_groundwork.sql`) is local and **not deployed**. Apply it once after migrations 1–8 only after separately authorized deployment. It adds two private tables and three RPCs; all existing save signatures, receipts, Restaurant reuse, location attachment functions, policies, grants and app screens remain unchanged. PostgreSQL adds internal foreign-key triggers to the original receipt table for the new bindings. No old receipts or addresses are backfilled, and no provider call, API key, dependency, Edge Function or UI is introduced.
+Migration 9 (`migrations/20261009000900_address_autocomplete_groundwork.sql`) introduced two private tables and three RPCs. Its old "not deployed" note is superseded by the owner-reported function deployments; exact hosted migration history remains unverified. Do not apply it again from this document. PostgreSQL adds internal foreign-key triggers to the original receipt table for the new bindings. No old receipts or addresses are backfilled, and no provider call, API key, dependency, Edge Function or UI is introduced by the migration itself.
 
 ### Exact group-entry bindings
 
@@ -285,7 +294,7 @@ This separate validator preserves the phase-2 runner unchanged. It uses the same
 
 All nine SQL suites and 85 overlapping-writer cases run: the 62 existing save/Visit/membership/personal/location cases plus 23 new binding/admission cases with verified database lock waits. New tests cover legacy receipts (including pre-migration data), actor-scoped request collisions, forged access, immutable targets, multi-group retries and partial failures, final-Visit deletion/recreation, owner/membership checks, both orderings of legacy/wrapped saves and membership/deletion races, disjoint-group receipt contention, rollback, exact rolling predicates and live cutoff/grace behavior, global/user last slots, burst admission, wall clock after lock waits, deleted-account usage retention, and rejection of stale-snapshot isolation. Existing offline personal/navigation, TypeScript and lint checks remain separate.
 
-Local tooling currently provides PostgreSQL 17.11 / PostGIS 3.5.6; the hosted PostGIS version reported by the owner is 3.3.7. Migration 9 introduces no PostGIS-specific SQL. Supabase JWT/PostgREST behavior, Edge authentication/permit dispatch, provider verification and live provider limits still require their later integration tests. Migration 9 has not been deployed or checked against hosted Supabase.
+Local tooling provides PostgreSQL 17.11 / PostGIS 3.5.6; the hosted PostGIS version previously reported by the owner is 3.3.7. Migration 9 introduces no PostGIS-specific SQL. Hosted versions/settings were not inspected during stabilization; historical local test results do not establish the current deployed state.
 
 ## Milestone 15: controlled local function runtime verification
 

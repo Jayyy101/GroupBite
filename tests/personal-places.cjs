@@ -22,7 +22,7 @@ function defer() { let resolve; const promise = new Promise(r => { resolve = r; 
 function runtime(options = {}) {
     const world = { auth: { loading: false, error: '', session: { user: { id: 'a' }, access_token: 'fake-a' } },
         focused: true, params: {}, rows: [], requests: [], navigation: [], listeners: new Set(), override: null,
-        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [] };
+        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localReads: 0, localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [] };
     let nextId = 2;
     async function fetchOffline(input, init) {
         const url = new URL(input), method = init.method ?? 'GET', headers = new Headers(init.headers);
@@ -68,6 +68,8 @@ function runtime(options = {}) {
     const appState = { currentState: 'active', addEventListener(_, fn) { world.listeners.add(fn); return { remove: () => world.listeners.delete(fn) }; } };
     let current;
     const react = {
+        createContext(value) { const context = { value }; context.Provider = { context }; return context; },
+        useContext(context) { return context.value; },
         useState(initial) {
             const frame = current, i = frame.cursor++;
             const slot = frame.slots[i] ??= { value: typeof initial === 'function' ? initial() : initial };
@@ -92,26 +94,33 @@ function runtime(options = {}) {
         },
     };
     const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
-    const router = options.router ?? { push: x => world.navigation.push(x), replace: x => world.navigation.push(x), dismissTo: x => world.navigation.push(x),
+    const router = options.router ?? { push: x => world.navigation.push(x), navigate: x => world.navigation.push(x), replace: x => world.navigation.push(x), dismissTo: x => world.navigation.push(x),
         canGoBack: () => world.canGoBack !== false, back: () => world.navigation.push('BACK') };
     const mocks = {
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { AppState: appState, Keyboard: { dismiss: () => world.keyboardDismissals++ },
+        'react-native': { AppState: appState, ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
             Linking: { async openURL(url) { world.links.push(url); } }, Platform: { OS: options.platform ?? 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
         'expo-router': { Redirect: 'Redirect', useRouter: () => router, useLocalSearchParams: () => world.params,
+            useGlobalSearchParams: () => world.params, usePathname: () => world.pathname ?? '/',
+            Stack: Object.assign(props => ({ type: 'Stack', props }), { Screen: 'StackScreen' }),
             useFocusEffect: cb => react.useEffect(() => world.focused ? cb() : undefined, [world.focused, cb]) },
         '@react-navigation/native': { useIsFocused: () => world.focused },
         '@/lib/supabase': { supabase, supabasePublicConfig: { url: 'https://abcdefghijklmnopqrst.supabase.co', publishableKey: 'sb_publishable_offline_test' } },
         '@/providers/auth': { useAuth: () => world.auth },
-        '@react-native-async-storage/async-storage': { default: { async getItem(key) { assert.equal(key, 'savedPlaces'); return world.local; },
+        '@/providers/legacy-archive': { useLegacyArchive: () => ({ allowed: options.archiveAllowed ?? true, allow: () => {} }) },
+        '@react-native-async-storage/async-storage': { default: { async getItem(key) { assert.equal(key, 'savedPlaces'); world.localReads++; return world.local; },
             async setItem(key, value) { assert.equal(key, 'savedPlaces'); world.localWrites++; world.local = value; } } },
+        ...options.mocks,
     };
     const cache = {};
     function load(name) {
         if (mocks[name]) return mocks[name];
         if (cache[name]) return cache[name];
         const base = path.join(root, name.replace(/^@\//, ''));
-        const file = ['.ts', '.tsx'].map(ext => base + ext).find(file => fs.existsSync(file));
+        const extensions = options.platform === 'ios' ? ['.ios.ts', '.ios.tsx', '.ts', '.tsx'] : ['.ts', '.tsx'];
+        const route = name.startsWith('app/') ? name.slice(4) : null;
+        const file = [base, path.join(base, 'index'), ...(route ? [path.join(root, 'app/(app)/(tabs)', route), path.join(root, 'app/(app)', route)] : [])]
+            .flatMap(base => extensions.map(ext => base + ext)).find(file => fs.existsSync(file));
         assert(file, 'Unexpected import ' + name);
         const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
         const module = { exports: {} }; cache[name] = module.exports;
@@ -119,7 +128,8 @@ function runtime(options = {}) {
             setInterval: () => 1, clearInterval: () => {},
             setTimeout: options.setTimeout ?? setTimeout, clearTimeout: options.clearTimeout ?? clearTimeout,
             fetch: options.autocompleteFetch ?? (() => assert.fail('Unexpected unmocked autocomplete Fetch')),
-            AbortController, URL, Headers, Request, Response, __DEV__: options.development ?? false, Date, console });
+            process: { env: options.autocompleteEnv ?? {} },
+            AbortController, URL, URLSearchParams, Headers, Request, Response, __DEV__: options.development ?? false, Date, console });
         return module.exports;
     }
     function render(Screen) {
@@ -132,6 +142,13 @@ function runtime(options = {}) {
                     if (element == null || typeof element === 'boolean') return null;
                     if (Array.isArray(element)) return element.map((x, i) => visit(x, route + '/' + (x?.key ?? i)));
                     if (typeof element !== 'object') return element;
+                    if (element.type?.context) {
+                        const context = element.type.context, previous = context.value;
+                        context.value = element.props.value;
+                        const children = visit(element.props.children, route + '/Provider');
+                        context.value = previous;
+                        return children;
+                    }
                     if (typeof element.type === 'function') {
                         options.observeComponent?.(element.type, element.props);
                         const key = route + ':' + element.type.name + ':' + (element.key ?? '');
@@ -175,11 +192,12 @@ function screen(rt, name) { return rt.render(rt.load('app/' + name).default); }
 module.exports = { runtime, fixture, response, screen, click, enter, fill, button, nodes, textOf };
 
 if (require.main === module) (async () => {
-    await test('Home exposes personal, group and legacy navigation without local writes', async () => {
+    await test('Home exposes Add, personal and group navigation without legacy exposure or local writes', async () => {
         const rt = runtime(), r = screen(rt, 'index'); await r.settle();
-        for (const [label, route] of [['My Places', '/my-places'], ['Add Restaurant / Visit', '/add-visit'], ['Saved Places (this device)', '/saved-places'], ['Groups', '/groups']]) {
+        for (const [label, route] of [['My Places', '/my-places'], ['Save a place', '/add'], ['Groups', '/groups']]) {
             await click(r, label); assert.equal(rt.world.navigation.at(-1), route);
         }
+        assert(!textOf(r.output).includes('Saved Places (this device)'));
         assert.equal(rt.world.localWrites, 0); assert.equal(rt.world.requests.length, 0); r.unmount();
     });
     await test('All personal routes require auth; restoration issues no request', async () => {
@@ -368,6 +386,9 @@ if (require.main === module) (async () => {
         const rt = runtime(), before = rt.world.local; const api = rt.load('@/lib/personal-places'); const saved = await api.createPersonalPlace('a', fixture(), 'legacy-check');
         await api.updatePersonalPlace('a', saved, fixture({ name: 'Updated' })); await api.deletePersonalPlace('a', fixture({ ...saved, revision: 2 })); rt.switch(null);
         assert.equal(rt.world.local, before); assert.equal(rt.world.localWrites, 0);
+        const locked = screen(rt, 'saved-places'); await locked.settle();
+        assert(!textOf(locked.output).includes('Local Cafe')); assert.equal(rt.world.localReads, 0); locked.unmount();
+        rt.switch('a');
         rt.world.params = { id: 'legacy' }; const r = screen(rt, 'add-place'); await r.settle();
         // The legacy name input predates accessibility labels.
         nodes(r.output).find(x => x.type === 'TextInput' && x.props.placeholder === 'Enter a name').props.onChangeText('Changed Local Cafe');

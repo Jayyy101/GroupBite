@@ -4,6 +4,7 @@ import { groupErrorMessage, isGroupAccessDenied } from "@/lib/group-errors";
 import { visitSummary } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
+import { accountAccessToken } from "@/lib/account-session";
 import { backendStyles as styles } from "@/styles/backend";
 import type { GroupMember, GroupMembershipTarget, GroupRestaurantSummary, PendingJoinRequest } from "@/types/database";
 import * as Clipboard from "expo-clipboard";
@@ -155,7 +156,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
     }, [groupId, access, accessLoading, isOwner, accessKey, clearDetails]);
 
     function startMutation(confirmed = false) {
-        if (mutation.current || loading || !access || loadError || (!confirmed && confirmation)) return null;
+        if (!active.current || mutation.current || loading || !access || loadError || (!confirmed && confirmation)) return null;
         mutation.current = true;
         setBusy(true);
         setError("");
@@ -187,11 +188,13 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
         if (epoch === null) return;
         if (action.kind === "transfer") setInviteCode(null);
         try {
+            const token = await accountAccessToken(userId);
+            if (!isCurrent(epoch)) return;
             const result = action.kind === "leave"
-                ? await supabase.rpc("leave_group", { target_group_id: groupId, expected_membership_id: action.membershipId })
+                ? await supabase.rpc("leave_group", { target_group_id: groupId, expected_membership_id: action.membershipId }).setHeader("Authorization", `Bearer ${token}`).retry(false)
                 : await supabase.rpc(action.kind === "remove" ? "remove_group_member" : "transfer_group_ownership", {
                     target_group_id: groupId, target_user_id: action.target.user_id, expected_membership_id: action.target.membership_id,
-                });
+                }).setHeader("Authorization", `Bearer ${token}`).retry(false);
             if (result.error) throw result.error;
             if (!isCurrent(epoch)) return;
             setConfirmation(null);
@@ -220,14 +223,16 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
         const epoch = startMutation();
         if (epoch === null) return;
         try {
+            const token = await accountAccessToken(userId);
+            if (!isCurrent(epoch)) return;
             if (action === "generate") {
-                const { data, error } = await supabase.rpc("generate_group_invite", { target_group_id: groupId });
+                const { data, error } = await supabase.rpc("generate_group_invite", { target_group_id: groupId }).setHeader("Authorization", `Bearer ${token}`).retry(false);
                 if (error) throw error;
                 if (!isCurrent(epoch)) return;
                 setInviteCode({ value: data, membershipId: access!.membershipId });
                 setMessage("New code generated. Any previous code is no longer valid.");
             } else {
-                const { error } = await supabase.rpc("revoke_group_invite", { target_group_id: groupId });
+                const { error } = await supabase.rpc("revoke_group_invite", { target_group_id: groupId }).setHeader("Authorization", `Bearer ${token}`).retry(false);
                 if (error) throw error;
                 if (!isCurrent(epoch)) return;
                 setInviteCode(null);
@@ -248,7 +253,9 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
         const epoch = startMutation();
         if (epoch === null) return;
         try {
-            const { error } = await supabase.rpc("decide_join_request", { target_request_id: requestId, decision });
+            const token = await accountAccessToken(userId);
+            if (!isCurrent(epoch)) return;
+            const { error } = await supabase.rpc("decide_join_request", { target_request_id: requestId, decision }).setHeader("Authorization", `Bearer ${token}`).retry(false);
             if (error) throw error;
             if (isCurrent(epoch)) setMessage(decision === "approved" ? "Request approved. They are now a group member." : "Request denied.");
         } catch (error) {

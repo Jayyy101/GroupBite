@@ -2,10 +2,11 @@ import { getSavedPlaces, updatePlace } from "@/utils/storage";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { LegacyAccess } from "@/components/legacy-access";
 export default function AddPlaceScreen() {
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
     if (id === undefined) return <Redirect href="/add-visit" />;
-    return <LegacyPlaceEditor key={JSON.stringify(id)} id={id} />;
+    return <LegacyAccess><LegacyPlaceEditor key={JSON.stringify(id)} id={id} /></LegacyAccess>;
 }
 
 function LegacyPlaceEditor({ id }: { id: string | string[] }) {

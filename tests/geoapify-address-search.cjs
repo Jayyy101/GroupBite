@@ -27,7 +27,7 @@ function modules(enabled, timers, logs) {
         const module = { exports: {} }; cache.set(file, module);
         const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
         vm.runInNewContext(code, { module, exports: module.exports, require: name => load(name), URL, Headers,
-            AbortController, Date, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
+            AbortController, Date, __DEV__: true, process: { env: {} }, setTimeout: timers.setTimeout, clearTimeout: timers.clearTimeout,
             fetch: () => assert.fail('Unmocked network request'), console: Object.fromEntries(['log', 'warn', 'error', 'debug', 'info', 'trace'].map(k => [k, (...args) => logs.push(args)])) }, { filename: file });
         return module.exports;
     }

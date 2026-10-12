@@ -10,6 +10,7 @@ export type VerifiedSelection = Readonly<{
     countryCode: "us";
 }>;
 export const RECEIPT_TTL_SECONDS = 600;
+export type VerifiedReceipt = Readonly<{ selection: VerifiedSelection; expiresAt: string }>;
 const audience = "groupbite.saved-location-selection";
 
 function encode(bytes: Uint8Array): string {
@@ -38,6 +39,24 @@ export async function createReceiptCodec(secret: string, issuer: string, webCryp
     if (!/^[0-9a-f]{64}$/i.test(secret)) throw new Error("Invalid signing configuration");
     const bytes = Uint8Array.from(secret.match(/../g)!, pair => parseInt(pair, 16));
     const key = await webCrypto.subtle.importKey("raw", bytes, { name: "HMAC", hash: "SHA-256" }, false, ["sign", "verify"]);
+    // Both APIs share signature/schema checks. Expiry is exposed only after verification.
+    async function verifyForAttachment(receipt: unknown, userId: string, expectedAddress: string, nowMs: number): Promise<VerifiedReceipt | null> {
+        try {
+            if (typeof receipt !== "string" || receipt.length > 4096 || !uuid(userId) || !Number.isFinite(nowMs)) return null;
+            const parts = receipt.split(".");
+            if (parts.length !== 2) return null;
+            const signature = decode(parts[1]);
+            if (signature.length !== 32 || !await webCrypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(parts[0]))) return null;
+            const data: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decode(parts[0])));
+            const now = Math.floor(nowMs / 1000);
+            if (!object(data) || Object.keys(data).sort().join(",") !== "aud,exp,iat,iss,selection,sub,v" ||
+                data.v !== 1 || data.aud !== audience || data.iss !== issuer || data.sub !== userId.toLowerCase() ||
+                typeof data.iat !== "number" || !Number.isSafeInteger(data.iat) || data.iat > now ||
+                typeof data.exp !== "number" || !Number.isSafeInteger(data.exp) || data.exp - data.iat !== RECEIPT_TTL_SECONDS ||
+                data.exp <= now || !validSelection(data.selection) || data.selection.address !== expectedAddress) return null;
+            return { selection: data.selection, expiresAt: new Date(data.exp * 1000).toISOString() };
+        } catch { return null; }
+    }
     return {
         async sign(userId: string, selection: VerifiedSelection, nowMs: number) {
             if (!uuid(userId) || !validSelection(selection) || !Number.isFinite(nowMs)) throw new Error("Invalid selection");
@@ -48,23 +67,10 @@ export async function createReceiptCodec(secret: string, issuer: string, webCryp
             const signature = await webCrypto.subtle.sign("HMAC", key, new TextEncoder().encode(body));
             return { selectionReceipt: `${body}.${encode(new Uint8Array(signature))}`, expiresAt: new Date(payload.exp * 1000).toISOString() };
         },
-        // Reserved for the later server-side attachment phase; no HTTP endpoint yet.
+        verifyForAttachment,
+        // Preserve the original suggestion-test/server verifier's return contract.
         async verify(receipt: unknown, userId: string, expectedAddress: string, nowMs: number): Promise<VerifiedSelection | null> {
-            try {
-                if (typeof receipt !== "string" || receipt.length > 4096 || !uuid(userId) || !Number.isFinite(nowMs)) return null;
-                const parts = receipt.split(".");
-                if (parts.length !== 2) return null;
-                const signature = decode(parts[1]);
-                if (signature.length !== 32 || !await webCrypto.subtle.verify("HMAC", key, signature, new TextEncoder().encode(parts[0]))) return null;
-                const data: unknown = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(decode(parts[0])));
-                const now = Math.floor(nowMs / 1000);
-                if (!object(data) || Object.keys(data).sort().join(",") !== "aud,exp,iat,iss,selection,sub,v" ||
-                    data.v !== 1 || data.aud !== audience || data.iss !== issuer || data.sub !== userId.toLowerCase() ||
-                    typeof data.iat !== "number" || !Number.isSafeInteger(data.iat) || data.iat > now ||
-                    typeof data.exp !== "number" || !Number.isSafeInteger(data.exp) || data.exp - data.iat !== RECEIPT_TTL_SECONDS ||
-                    data.exp <= now || !validSelection(data.selection) || data.selection.address !== expectedAddress) return null;
-                return data.selection;
-            } catch { return null; }
+            return (await verifyForAttachment(receipt, userId, expectedAddress, nowMs))?.selection ?? null;
         },
     };
 }
