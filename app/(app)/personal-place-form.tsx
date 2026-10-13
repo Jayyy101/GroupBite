@@ -1,4 +1,5 @@
 import { PersonalAccess } from "@/components/personal-access";
+import PersonalApplePlacePicker from "@/components/personal-apple-place-picker";
 import { PersonalPlaceFields } from "@/components/personal-place-fields";
 import { useAddressSearch, type AddressSearchBinding } from "@/hooks/use-address-search";
 import { createPersonalPlace, getPersonalPlace, normalizePersonalPlace, PersonalPlaceError, personalPlaceErrorMessage, reconcilePersonalPlace, updatePersonalPlace } from "@/lib/personal-places";
@@ -12,6 +13,9 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { AppState, Pressable, ScrollView, Text } from "react-native";
 
 const empty: Fields = { name: "", address: "", cuisine: null, visited_on: null, rating: null, would_go_again: null, notes: null };
+// Migration 13 deployment and development ID-bearing saves are approved.
+// Deliberately not controlled by an environment variable or remote configuration.
+const APPLE_PLACE_ID_SAVING_ENABLED: boolean = __DEV__;
 
 export default function PersonalPlaceFormScreen() {
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
@@ -39,12 +43,14 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
     const submitting = useRef(false);
     const blockedRef = useRef(false);
     const submission = useRef<{ requestId: string } | null>(null);
+    const appleSelection = useRef<{ id: string; address: string } | null>(null);
     const visibility = useRef({ active: false, epoch: 0 });
     useEffect(() => {
         mounted.current = true;
         let active = true;
         setFields(empty); setPlace(null); setError(""); setLoadError(""); setBlocked(false);
         blockedRef.current = false;
+        appleSelection.current = null;
         // Invalidate navigation even if inactive -> active is batched by React.
         const subscription = id === undefined ? AppState.addEventListener("change", state => {
             if (state !== "active") visibility.current.epoch++;
@@ -77,6 +83,7 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
         if (id !== undefined) return;
         setFields(empty); setError(""); setBlocked(false);
         blockedRef.current = false; submission.current = null;
+        appleSelection.current = null;
         visibility.current.epoch++;
     }
     function confirmed(saved: PersonalPlace, epoch: number) {
@@ -84,6 +91,7 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
         const canOpen = visibility.current.active && visibility.current.epoch === epoch && AppState.currentState === "active";
         if (id === undefined) {
             setFields(empty);
+            appleSelection.current = null;
             // Retain only the request identity until its result is reviewed.
             // An absent receipt later is never permission to replay this save.
             blockedRef.current = true; setBlocked(true);
@@ -102,7 +110,8 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
         if (id === undefined) submission.current = { requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
         try {
             const saved = place ? await updatePersonalPlace(userId, place, value)
-                : await createPersonalPlace(userId, value, submission.current!.requestId);
+                : await createPersonalPlace(userId, value, submission.current!.requestId,
+                    APPLE_PLACE_ID_SAVING_ENABLED && appleSelection.current?.address === fields.address ? appleSelection.current.id : undefined);
             confirmed(saved, epoch);
         } catch (error) {
             if (mounted.current) {
@@ -136,11 +145,11 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
         error={error} busy={busy} blocked={blocked} back={back} save={save} checkSavedResult={checkSavedResult}
         review={() => { if (!submitting.current) { clearCreateDraft(); router.dismissTo("/my-places"); } }}
         cancelEdit={() => { if (isUuid(id)) router.dismissTo({ pathname: "/personal-place/[id]", params: { id } }); }}
-        refresh={() => setRefresh(value => value + 1)} visibility={visibility} />;
+        refresh={() => setRefresh(value => value + 1)} visibility={visibility} appleSelection={appleSelection} />;
     return id === undefined ? <PersonalAccess title="Add Personal Place">{() => form}</PersonalAccess> : form;
 }
 
-function PersonalPlaceFormBody({ autocomplete, id, fields, setFields, loading, loadError, error, busy, blocked, back, save, checkSavedResult, review, cancelEdit, refresh, visibility }: {
+function PersonalPlaceFormBody({ autocomplete, id, fields, setFields, loading, loadError, error, busy, blocked, back, save, checkSavedResult, review, cancelEdit, refresh, visibility, appleSelection }: {
     autocomplete: AddressSearchBinding;
     id?: string | string[];
     fields: Fields;
@@ -149,14 +158,15 @@ function PersonalPlaceFormBody({ autocomplete, id, fields, setFields, loading, l
     back: () => void; save: () => Promise<void>; checkSavedResult: () => Promise<void>;
     review: () => void; cancelEdit: () => void; refresh: () => void;
     visibility: RefObject<{ active: boolean; epoch: number }>;
+    appleSelection: RefObject<{ id: string; address: string } | null>;
 }) {
     // Selection/coordinates and search work belong to the disposable UI only.
     const [addressSelection, setAddressSelection] = useState<AddressSuggestion | null>(null);
     useEffect(() => {
         const state = visibility.current;
         state.active = true;
-        return () => { state.active = false; state.epoch++; };
-    }, [visibility]);
+        return () => { state.active = false; state.epoch++; appleSelection.current = null; };
+    }, [visibility, appleSelection]);
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
             <Pressable accessibilityRole="button" disabled={busy} onPress={back} style={[styles.secondaryButton, styles.backButton, busy && styles.disabled]}><Text style={styles.secondaryText}>Back</Text></Pressable>
@@ -165,8 +175,11 @@ function PersonalPlaceFormBody({ autocomplete, id, fields, setFields, loading, l
             {loading ? <Text style={styles.message}>Loading place...</Text> : loadError !== "" ? <Text style={styles.error}>{loadError}</Text> : <>
                 <PersonalPlaceFields autocomplete={autocomplete} value={fields} onChange={setFields} busy={busy || blocked}
                     addressSelection={addressSelection} onAddressChange={(address, selection) => {
+                        if (address !== fields.address) appleSelection.current = null;
                         setFields(current => ({ ...current, address })); setAddressSelection(selection);
                     }} />
+                {__DEV__ && id === undefined && <PersonalApplePlacePicker key={fields.address} disabled={busy || blocked}
+                    onSelect={appleId => { appleSelection.current = appleId ? { id: appleId, address: fields.address } : null; }} />}
                 {error !== "" && <Text style={styles.error}>{error}</Text>}
                 <Pressable accessibilityRole="button" disabled={busy || blocked} onPress={save} style={[styles.primaryButton, (busy || blocked) && styles.disabled]}><Text style={styles.primaryText}>{busy ? "Saving..." : id === undefined ? "Save Personal Place" : "Save Changes"}</Text></Pressable>
                 {blocked && id === undefined && <>

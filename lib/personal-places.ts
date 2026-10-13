@@ -69,12 +69,21 @@ export async function reconcilePersonalPlace(userId: string, requestId: string):
     return result.data;
 }
 
-export async function createPersonalPlace(userId: string, fields: PersonalPlaceFields, requestId: string): Promise<PersonalPlace> {
+export async function createPersonalPlace(userId: string, fields: PersonalPlaceFields, requestId: string, applePlaceId?: string | null): Promise<PersonalPlace> {
     const value = normalizePersonalPlace(fields);
+    // Keep the opaque identifier separate from user-entered facts. Match
+    // Migration 13 without altering the ID or assuming an Apple ID format.
+    if (applePlaceId != null && (typeof applePlaceId !== "string" || !applePlaceId
+        || Array.from(applePlaceId).length > 300 || applePlaceId !== applePlaceId.trim()
+        || /[\u0000-\u001f\u007f-\u009f]/.test(applePlaceId))) {
+        throw new PersonalPlaceError("invalid", "Invalid Apple Place ID. Save without it or select the place again.");
+    }
     const token = await accountToken(userId);
     // No upsert or automatic mutation retries. A lost response is reconciled by
     // reading this request ID; a missing result is never automatically recreated.
-    const result = await supabase.from("personal_places").insert({ ...value, client_request_id: requestId })
+    // Omit absent IDs so existing callers also work against pre-Migration 13 schemas.
+    const result = await supabase.from("personal_places").insert({ ...value, client_request_id: requestId,
+        ...(applePlaceId != null ? { apple_place_id: applePlaceId } : {}) })
         .select("*").setHeader("Authorization", `Bearer ${token}`).retry(false).single();
     if (!result.error && result.data) return result.data;
     if (result.error && ["22007", "22008", "23514", "42501"].includes(result.error.code)) {

@@ -77,6 +77,8 @@ export type PersonalPlaceFields = {
 };
 
 export type PersonalPlace = PersonalPlaceFields & {
+    // Older schemas/responses may omit this creation-only identifier.
+    apple_place_id?: string | null;
     id: string;
     owner_user_id: string;
     client_request_id: string;
@@ -173,7 +175,7 @@ export type Database = {
         Tables: {
             personal_places: {
                 Row: PersonalPlace;
-                Insert: PersonalPlaceFields & { client_request_id: string };
+                Insert: PersonalPlaceFields & { client_request_id: string; apple_place_id?: string | null };
                 Update: Partial<PersonalPlaceFields>;
                 Relationships: [];
             };

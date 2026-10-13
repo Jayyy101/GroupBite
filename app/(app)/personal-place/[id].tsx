@@ -1,4 +1,5 @@
 import { PersonalAccess } from "@/components/personal-access";
+import PersonalApplePlaceLookup from "@/components/personal-apple-place-lookup";
 import { deletePersonalPlace, getPersonalPlace, personalPlaceErrorMessage } from "@/lib/personal-places";
 import { isUuid } from "@/lib/restaurant-ui";
 import { backendStyles as styles } from "@/styles/backend";
@@ -62,6 +63,7 @@ function PersonalPlaceDetails({ userId, id }: { userId: string; id?: string | st
                 {place.rating !== null && <Text style={styles.message}>Rating: {place.rating}/5</Text>}
                 {place.would_go_again !== null && <Text style={styles.message}>Would go again: {place.would_go_again ? "Yes" : "No"}</Text>}
                 {place.notes !== null && <Text style={styles.message}>{place.notes}</Text>}
+                {__DEV__ && <PersonalApplePlaceLookup key={`${place.id}:${place.revision}:${refresh}`} applePlaceId={place.apple_place_id} disabled={busy || confirming} />}
                 {!confirming ? <>
                     <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.push({ pathname: "/personal-place-form", params: { id: place.id } })} style={styles.primaryButton}><Text style={styles.primaryText}>Edit Personal Place</Text></Pressable>
                     <Pressable accessibilityRole="button" disabled={busy} onPress={() => setConfirming(true)} style={styles.secondaryButton}><Text style={styles.secondaryText}>Delete Personal Place</Text></Pressable>

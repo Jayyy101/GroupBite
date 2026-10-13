@@ -34,7 +34,7 @@ function runtime(options = {}) {
         if (options.fetch) return options.fetch(call);
         assert.equal(url.pathname, '/rest/v1/personal_places', 'Personal screens must not request shared/group data');
         if (method === 'POST' || method === 'PATCH') {
-            const allowed = ['name', 'address', 'cuisine', 'visited_on', 'rating', 'would_go_again', 'notes', ...(method === 'POST' ? ['client_request_id'] : [])];
+            const allowed = ['name', 'address', 'cuisine', 'visited_on', 'rating', 'would_go_again', 'notes', ...(method === 'POST' ? ['client_request_id', 'apple_place_id'] : [])];
             assert(Object.keys(body).every(key => allowed.includes(key)), 'Immutable columns must not enter mutation payloads');
         }
         const overridden = world.override?.(call);
@@ -110,6 +110,8 @@ function runtime(options = {}) {
         '@/providers/legacy-archive': { useLegacyArchive: () => ({ allowed: options.archiveAllowed ?? true, allow: () => {} }) },
         '@react-native-async-storage/async-storage': { default: { async getItem(key) { assert.equal(key, 'savedPlaces'); world.localReads++; return world.local; },
             async setItem(key, value) { assert.equal(key, 'savedPlaces'); world.localWrites++; world.local = value; } } },
+        expo: { requireOptionalNativeModule: () => null },
+        'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' },
         ...options.mocks,
     };
     const cache = {};
@@ -222,6 +224,88 @@ if (require.main === module) (async () => {
         r.unmount(); const again = screen(rt, 'personal-place-form'); await again.settle(); await fill(again); await click(again, 'Save Personal Place');
         assert.equal(rt.world.rows.length, 2); assert.notEqual(rt.world.rows[0].client_request_id, rt.world.rows[1].client_request_id);
         assert.equal(rt.world.local, before); assert.equal(rt.world.localWrites, 0); again.unmount();
+    });
+    await test('Creation omits absent IDs and only accepts an explicitly supplied Apple ID', async () => {
+        for (const id of [undefined, null, 'Opaque Mixed-Case ID', '🍕'.repeat(300)]) {
+            const rt = runtime(), api = rt.load('@/lib/personal-places');
+            const fields = fixture({ apple_place_id: 'must-not-copy', latitude: 37, longitude: -122, placeId: 'map-result' });
+            const saved = await api.createPersonalPlace('a', fields, 'optional-id', id);
+            const expected = { ...api.normalizePersonalPlace(fields), client_request_id: 'optional-id',
+                ...(id != null ? { apple_place_id: id } : {}) };
+            assert.deepEqual(JSON.parse(JSON.stringify(rt.world.requests[0].body)), JSON.parse(JSON.stringify(expected)));
+            assert.equal(saved.apple_place_id, id ?? undefined);
+            assert.equal(saved.name, fields.name); assert.equal(saved.address, fields.address);
+            assert.equal(rt.world.requests.length, 1);
+        }
+    });
+    await test('Invalid Apple IDs fail before authentication or HTTP and never expose the ID', async () => {
+        const rt = runtime(), api = rt.load('@/lib/personal-places');
+        rt.supabase.auth.getSession = async () => assert.fail('Invalid IDs must fail before session access');
+        for (const id of ['', ' '.repeat(2), ' padded', 'padded\u00a0', '\ufeffpadded', 'x'.repeat(301), '🍕'.repeat(301),
+            'private\u0000id', 'private\u001fid', 'private\u007fid', 'private\u0085id', 'private\u009fid', 123, {}]) {
+            await assert.rejects(api.createPersonalPlace('a', fixture(), 'invalid-id', id),
+                error => error.kind === 'invalid' && !error.message.includes('private'));
+        }
+        assert.equal(rt.world.requests.length, 0);
+    });
+    await test('Apple IDs never enter update payloads even when passed a complete saved row', async () => {
+        const rt = runtime(), api = rt.load('@/lib/personal-places');
+        rt.world.rows = [fixture({ apple_place_id: 'existing-id' })];
+        await api.updatePersonalPlace('a', rt.world.rows[0], fixture({ apple_place_id: 'replacement-id', notes: 'User note' }));
+        const patch = rt.world.requests[0];
+        assert.equal(patch.method, 'PATCH'); assert(!('apple_place_id' in patch.body));
+        assert.equal(patch.body.notes, 'User note'); assert.equal(rt.world.rows[0].apple_place_id, 'existing-id');
+        assert.equal(patch.url.searchParams.get('revision'), 'eq.1');
+    });
+    await test('Apple ID inserts preserve validation and permission failures without retrying', async () => {
+        for (const code of ['23514', '42501']) {
+            const rt = runtime(), api = rt.load('@/lib/personal-places');
+            rt.world.override = () => response({ code, message: 'private server details' }, 400);
+            await assert.rejects(api.createPersonalPlace('a', fixture(), 'denied-id', 'opaque-id'),
+                error => error.kind === 'invalid' && !error.message.includes('private'));
+            assert.equal(rt.world.requests.length, 1); assert.equal(rt.world.requests[0].method, 'POST');
+        }
+    });
+    await test('Lost Apple ID saves reconcile by receipt without resending or overwriting cleared IDs', async () => {
+        for (const currentId of ['opaque-id', null]) {
+            const rt = runtime(), api = rt.load('@/lib/personal-places');
+            rt.world.override = call => {
+                if (call.method !== 'POST') return null;
+                rt.world.rows.push(fixture({ ...call.body, apple_place_id: currentId, name: 'Current user facts', revision: 2 }));
+                throw new TypeError('Lost response');
+            };
+            const saved = await api.createPersonalPlace('a', fixture(), 'lost-id', 'opaque-id');
+            assert.equal(saved.apple_place_id, currentId); assert.equal(saved.name, 'Current user facts');
+            assert.deepEqual(rt.world.requests.map(call => call.method), ['POST', 'GET']);
+            assert.equal(rt.world.requests[1].url.searchParams.get('client_request_id'), 'eq.lost-id');
+        }
+        const rt = runtime(), api = rt.load('@/lib/personal-places');
+        rt.world.rows = [fixture({ apple_place_id: null, name: 'Edited facts', revision: 3 })];
+        const saved = await api.createPersonalPlace('a', fixture(), 'original', 'replacement-id');
+        assert.equal(saved.apple_place_id, null); assert.equal(saved.revision, 3);
+        assert.equal(saved.name, 'Edited facts'); assert.deepEqual(rt.world.requests.map(call => call.method), ['POST', 'GET']);
+    });
+    await test('Uncertain Apple ID saves and unavailable columns never retry or silently drop the ID', async () => {
+        for (const code of ['', 'PGRST204']) for (const failedRead of [false, true]) {
+            const rt = runtime(), api = rt.load('@/lib/personal-places');
+            rt.world.override = call => call.method === 'POST' || failedRead
+                ? response({ code, message: 'private server details' }, 400) : null;
+            await assert.rejects(api.createPersonalPlace('a', fixture(), 'uncertain-id', 'opaque-id'),
+                error => error.kind === 'uncertain' && !error.message.includes('private'));
+            assert.deepEqual(rt.world.requests.map(call => call.method), ['POST', 'GET']);
+            assert.equal(rt.world.requests[0].body.apple_place_id, 'opaque-id'); assert.equal(rt.world.rows.length, 0);
+        }
+    });
+    await test('Apple ID saves pin the initiating account and cannot reconcile under a switched account', async () => {
+        const rt = runtime(), api = rt.load('@/lib/personal-places'); rt.switch('b');
+        await assert.rejects(api.createPersonalPlace('a', fixture(), 'wrong-account-id', 'opaque-id'), error => error.kind === 'account');
+        assert.equal(rt.world.requests.length, 0); rt.switch('a');
+        rt.world.override = call => {
+            assert.equal(call.headers.get('Authorization'), 'Bearer fake-a');
+            rt.switch('b'); return response({ code: '', message: 'Lost response' }, 400);
+        };
+        await assert.rejects(api.createPersonalPlace('a', fixture(), 'switched-id', 'opaque-id'), error => error.kind === 'account');
+        assert.deepEqual(rt.world.requests.map(call => call.method), ['POST']);
     });
     await test('Validation rejects invalid memories before HTTP; nullable controls clear answers', async () => {
         const rt = runtime(), r = screen(rt, 'personal-place-form'); await r.settle(); await click(r, 'Save Personal Place'); assert.equal(rt.world.requests.length, 0);

@@ -58,7 +58,7 @@ async function main() {
         grant usage on schema auth to anon,authenticated,service_role;
         alter default privileges in schema public grant all on tables to anon,authenticated,service_role;
         alter default privileges in schema public grant execute on functions to anon,authenticated,service_role;`);
-    const migrations = (await fs.readdir(path.join(root, 'migrations'))).filter(file => file.endsWith('.sql')).sort();
+    const migrations = (await fs.readdir(path.join(root, 'migrations'))).filter(file => file.endsWith('.sql')).sort().slice(0, 12);
     assert.equal(migrations.length, 12); assert.equal(migrations[11], '20261011001200_restaurant_catalog_privacy.sql');
     for (const migration of migrations.slice(0, 11)) await admin.query(await source('migrations/' + migration));
     await admin.query("insert into auth.users values($1,'{}'),($2,'{}'),($3,'{}')", [owner, other, member]);
