@@ -1,3 +1,4 @@
+import GroupApplePlaceLookup from "@/components/group-apple-place-lookup";
 import { VisitManagement } from "@/components/visit-management";
 import { useGroupAccess } from "@/hooks/use-group-access";
 import { isGroupAccessDenied } from "@/lib/group-errors";
@@ -110,6 +111,8 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
                     <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Another Visit</Text>
                     </Pressable>
+                    {__DEV__ && <GroupApplePlaceLookup key={`${userId}:${groupId}:${entryId}:${accessKey}`}
+                        userId={userId} groupId={groupId} entryId={entryId} disabled={management !== null || busy} />}
                     <Text style={styles.label}>This group&apos;s visits</Text>
                     {visits.length === 0 && <Text style={styles.message}>No visits yet.</Text>}
                     {visits.map(visit => (

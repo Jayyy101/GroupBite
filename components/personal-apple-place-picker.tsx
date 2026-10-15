@@ -8,7 +8,7 @@ import { AppState, Keyboard, Pressable, Text, TextInput, View } from "react-nati
 
 // Results and coordinates live only in this disposable, development-only UI.
 // The callback receives only an optional ID already validated by the adapter.
-export default function PersonalApplePlacePicker({ disabled, onSelect }: { disabled: boolean; onSelect: (id: string | null) => void }) {
+export default function PersonalApplePlacePicker({ disabled, onSelect, saveDestination = "personal place" }: { disabled: boolean; onSelect: (id: string | null) => void; saveDestination?: string }) {
     const [open, setOpen] = useState(false);
     const [available] = useState(appleSearchAvailable);
     return <View>
@@ -19,12 +19,12 @@ export default function PersonalApplePlacePicker({ disabled, onSelect }: { disab
         {open && <>
             <Text style={styles.message}>Enter your own restaurant name and address above. In development, explicitly selecting a place with an Apple Place ID includes only that ID when you save. Apple map names, addresses and coordinates are not copied or saved.</Text>
             {!available ? <Text style={styles.message}>Apple search requires a compatible local iOS debug build. You can save normally without an Apple ID.</Text>
-                : <PickerSearch disabled={disabled} onSelect={onSelect} />}
+                : <PickerSearch disabled={disabled} onSelect={onSelect} saveDestination={saveDestination} />}
         </>}
     </View>;
 }
 
-function PickerSearch({ disabled, onSelect }: { disabled: boolean; onSelect: (id: string | null) => void }) {
+function PickerSearch({ disabled, onSelect, saveDestination }: { disabled: boolean; onSelect: (id: string | null) => void; saveDestination: string }) {
     const [query, setQuery] = useState(""), [mode, setMode] = useState<AppleSearchMode>("business");
     const [action, setAction] = useState<"complete" | "search">("complete"), [edits, setEdits] = useState(0);
     const [suggestions, setSuggestions] = useState<AppleSearchSuggestion[]>([]), [candidates, setCandidates] = useState<AppleSearchLocation[]>([]);
@@ -120,7 +120,7 @@ function PickerSearch({ disabled, onSelect }: { disabled: boolean; onSelect: (id
             <Text style={styles.message}>No matching Apple results. Try Search Apple places or a more specific address and city. You can still save normally.</Text>}
         {selected && <>
             <Text style={styles.message}>Apple preview: {selected.name}{"\n"}{selected.address}</Text>
-            <Text style={styles.message}>{selected.placeId ? "Apple Place ID selected. It will be included when you save this personal place in development." : "No Apple Place ID for this result. You can still save normally."}</Text>
+            <Text style={styles.message}>{selected.placeId ? `Apple Place ID selected. It will be included when you save this ${saveDestination} in development.` : "No Apple Place ID for this result. You can still save normally."}</Text>
         </>}
     </View>;
 }

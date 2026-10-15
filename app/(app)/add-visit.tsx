@@ -1,5 +1,7 @@
 import { AddressAutocomplete } from "@/components/address-autocomplete";
-import { accountAccessToken } from "@/lib/account-session";
+import ApplePlacePicker from "@/components/personal-apple-place-picker";
+import { freezeGroupVisitSubmission, sendGroupVisitSubmission, isDefinitiveVisitRejection,
+    type GroupVisitSubmission } from "@/lib/group-visit-save";
 import type { AddressSuggestion } from "@/lib/address-search";
 import { isUuid, isVisitDate, restaurantErrorMessage } from "@/lib/restaurant-ui";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
@@ -9,10 +11,10 @@ import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { Group, SaveVisitArgs } from "@/types/database";
-import { useIsFocused } from "@react-navigation/native";
+import { useIsFocused, useNavigation, usePreventRemove } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { AppState, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
+import { AppState, Modal, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 
 export default function AddVisitScreen() {
     const router = useRouter();
@@ -39,6 +41,10 @@ export default function AddVisitScreen() {
 
 function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?: string; restaurantId?: string }) {
     const router = useRouter();
+    const navigation = useNavigation();
+    const { session, loading: accountLoading } = useAuth();
+    const currentAccount = useRef(false);
+    currentAccount.current = !accountLoading && session?.user.id === userId;
     const autocomplete = useAddressSearch();
     const [name, setName] = useState("");
     const [address, setAddress] = useState("");
@@ -56,10 +62,61 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     const [error, setError] = useState("");
     const [saving, setSaving] = useState(false);
     const [refreshVersion, setRefreshVersion] = useState(0);
-    const lastSubmission = useRef<{ payload: string; requestId: string } | null>(null);
+    const lastSubmission = useRef<GroupVisitSubmission | null>(null);
+    const [submissionLocked, setSubmissionLocked] = useState(false);
+    const [completed, setCompleted] = useState(false);
+    const completedRef = useRef(false), uncertain = useRef(false);
+    const appleSelection = useRef<{ id: string; address: string } | null>(null);
+    const [appleReset, setAppleReset] = useState(0);
+    const [confirmLeaving, setConfirmLeaving] = useState(false);
+    const [allowLeave, setAllowLeave] = useState(false);
+    const pendingLeave = useRef<(() => void) | null>(null);
+    const abandoning = useRef(false);
+    const locked = saving || submissionLocked;
+    const destinationAccessKey = groups.filter(group => selectedGroups.includes(group.id))
+        .map(group => `${group.id}:${group.owner_user_id}`).sort().join(",");
     const mounted = useRef(false), submitting = useRef(false), visible = useRef(false);
     const isFocused = useIsFocused();
     const { version: foregroundVersion, isActive } = useForegroundRefresh();
+
+    // Native-stack uses this hook to prevent iOS gesture dismissal as well as
+    // JS removal actions. Account replacement/sign-out disposes the keyed form.
+    usePreventRemove(currentAccount.current && !allowLeave && !completed
+        && (saving || uncertain.current), ({ data }) => {
+        requestLeave(() => navigation.dispatch(data.action));
+    });
+
+    useEffect(() => {
+        if (!allowLeave || !mounted.current || !currentAccount.current) return;
+        const leave = pendingLeave.current;
+        pendingLeave.current = null;
+        leave?.();
+    }, [allowLeave]);
+
+    function requestLeave(leave: () => void) {
+        if (!mounted.current || abandoning.current) return;
+        if (!currentAccount.current || completedRef.current || (!submitting.current && !uncertain.current)) {
+            leave();
+            return;
+        }
+        if (pendingLeave.current) return;
+        pendingLeave.current = leave;
+        setConfirmLeaving(true);
+    }
+
+    function stayOnSave() {
+        if (!mounted.current) return;
+        pendingLeave.current = null;
+        setConfirmLeaving(false);
+    }
+
+    function leaveAnyway() {
+        if (!mounted.current || !currentAccount.current || !pendingLeave.current) return;
+        // Prevent a late save result from racing the deliberate navigation.
+        abandoning.current = true;
+        setConfirmLeaving(false);
+        setAllowLeave(true);
+    }
 
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     useEffect(() => {
@@ -69,7 +126,17 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
 
     useEffect(() => {
         setAddressSelection(null);
+        appleSelection.current = null; setAppleReset(value => value + 1);
     }, [isFocused, isActive, foregroundVersion, refreshVersion]);
+
+    useEffect(() => {
+        const subscription = AppState.addEventListener("change", state => {
+            if (state !== "active") { appleSelection.current = null; setAppleReset(value => value + 1); }
+        });
+        return () => subscription.remove();
+    }, []);
+
+    useEffect(() => { appleSelection.current = null; setAppleReset(value => value + 1); }, [selectedGroups, destinationAccessKey, loadError]);
 
     useEffect(() => {
         setGroups([]);
@@ -87,12 +154,15 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
                 if (result.error) throw result.error;
                 if (!active) return;
                 setGroups(result.data);
-                setSelectedGroups(selected => selected.filter(id => result.data.some(group => group.id === id)));
+                setSelectedGroups(selected => {
+                    const next = selected.filter(id => result.data.some(group => group.id === id));
+                    return next.length === selected.length ? selected : next;
+                });
                 if ((includeRestaurant || !restaurantLoaded) && restaurantId !== undefined) {
                     if (!isUuid(restaurantId)) throw new Error("Invalid restaurant");
                     const restaurant = await supabase.from("restaurants").select("*").eq("id", restaurantId).single();
                     if (restaurant.error) throw restaurant.error;
-                    if (active) {
+                    if (active && !lastSubmission.current) {
                         setName(restaurant.data.name);
                         setAddress(restaurant.data.address);
                         setCuisine(restaurant.data.cuisine ?? "");
@@ -115,17 +185,17 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     }, [restaurantId, refreshVersion, isFocused, isActive, foregroundVersion]);
 
     async function handleSave() {
-        if (!mounted.current || !visible.current || AppState.currentState !== "active" || submitting.current || saving || loading || loadError !== "") return;
+        if (!mounted.current || abandoning.current || !visible.current || AppState.currentState !== "active" || submitting.current || saving || completedRef.current || (!lastSubmission.current && (loading || loadError !== ""))) return;
         setError("");
-        if (!name.trim() || !address.trim()) {
+        if (!lastSubmission.current && (!name.trim() || !address.trim())) {
             setError("Please enter a restaurant name and address.");
             return;
         }
-        if (visitedOn.trim() !== "" && !isVisitDate(visitedOn.trim())) {
+        if (!lastSubmission.current && visitedOn.trim() !== "" && !isVisitDate(visitedOn.trim())) {
             setError("Enter a real visit date as YYYY-MM-DD, or leave it blank.");
             return;
         }
-        if (selectedGroups.length === 0) {
+        if (!lastSubmission.current && selectedGroups.length === 0) {
             setError("Please choose at least one group.");
             return;
         }
@@ -139,23 +209,33 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             visit_would_go_again: wouldGoAgain,
             visit_notes: notes.trim() || null,
         };
-        const payload = JSON.stringify(details);
-        if (lastSubmission.current?.payload !== payload) {
-            // This is a retry identifier, not a secret or an access token.
-            lastSubmission.current = { payload, requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
-        }
+        const retryingUncertainSave = uncertain.current;
+        const submission = lastSubmission.current ?? freezeGroupVisitSubmission(userId, details,
+            __DEV__ && appleSelection.current?.address === address ? appleSelection.current.id : undefined);
+        lastSubmission.current = submission;
+        appleSelection.current = null;
+        setSubmissionLocked(true);
         submitting.current = true;
         setSaving(true);
         try {
-            const token = await accountAccessToken(userId);
-            if (!mounted.current) return;
-            const { error } = await supabase.rpc("save_restaurant_visit", {
-                ...details, client_request_id: lastSubmission.current.requestId,
-            }).setHeader("Authorization", `Bearer ${token}`).retry(false);
-            if (error) throw error;
+            const sent = await sendGroupVisitSubmission(submission, () => mounted.current && !abandoning.current && visible.current && AppState.currentState === "active");
+            if (!mounted.current || abandoning.current) return;
+            if (!sent) { setError("Save paused before sending. Retry this same submission when this screen is active."); return; }
+            completedRef.current = true; setCompleted(true); uncertain.current = false;
+            pendingLeave.current = null; setConfirmLeaving(false);
         } catch (error) {
-            if (!mounted.current) return;
-            setError(restaurantErrorMessage(error));
+            if (!mounted.current || abandoning.current) return;
+            if (!retryingUncertainSave && isDefinitiveVisitRejection(error)) {
+                lastSubmission.current = null; setSubmissionLocked(false);
+                pendingLeave.current = null; setConfirmLeaving(false);
+                const code = error && typeof error === "object" && "code" in error ? error.code : undefined;
+                setError(typeof code === "string" && ["40P01", "40001", "57014"].includes(code)
+                    ? "This attempt was rolled back without saving a visit. You can correct the fields and save again."
+                    : restaurantErrorMessage(error));
+            } else {
+                uncertain.current = true;
+                setError("The save result is uncertain. Your submission is locked. Retry the same save to confirm it without adding duplicate visits.");
+            }
             if (isGroupAccessDenied(error)) {
                 setGroups([]);
                 setRefreshVersion(value => value + 1);
@@ -165,9 +245,15 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             submitting.current = false;
             if (mounted.current) setSaving(false);
         }
-        if (!mounted.current || !visible.current || AppState.currentState !== "active") return;
-        if (selectedGroups.length === 1) {
-            router.dismissTo({ pathname: "/group/[id]", params: { id: selectedGroups[0] } });
+        if (!mounted.current || abandoning.current || !visible.current || AppState.currentState !== "active") return;
+        finishSubmission();
+    }
+
+    function finishSubmission() {
+        const destination = lastSubmission.current?.args.target_group_ids;
+        if (!completedRef.current || !destination || !mounted.current || abandoning.current || !visible.current || AppState.currentState !== "active") return;
+        if (destination.length === 1) {
+            router.dismissTo({ pathname: "/group/[id]", params: { id: destination[0] } });
         } else {
             router.dismissTo("/groups");
         }
@@ -176,31 +262,50 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     const existingRestaurant = restaurantId !== undefined;
     return (
         <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled" automaticallyAdjustKeyboardInsets>
-            <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.canGoBack() ? router.back() : router.replace("/groups")} style={[styles.secondaryButton, styles.backButton]}>
+            <Pressable accessibilityRole="button" onPress={() => requestLeave(() => router.canGoBack() ? router.back() : router.replace("/groups"))} style={[styles.secondaryButton, styles.backButton]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
+            {confirmLeaving && <Modal visible transparent animationType="fade" onRequestClose={stayOnSave}>
+                <View style={formStyles.confirmationOverlay}>
+                    <View accessibilityViewIsModal style={[styles.card, formStyles.confirmationCard]}>
+                        <Text style={styles.cardTitle}>Leave this save?</Text>
+                        <Text style={styles.message}>Stay to keep this submission and retry the exact same save. The visit may already have been saved. If you leave, reopening cannot safely retry it. Check your group&apos;s visits before adding another.</Text>
+                        <Pressable accessibilityRole="button" onPress={stayOnSave} style={styles.primaryButton}>
+                            <Text style={styles.primaryText}>Stay and Keep Submission</Text>
+                        </Pressable>
+                        <Pressable accessibilityRole="button" onPress={leaveAnyway} style={styles.secondaryButton}>
+                            <Text style={styles.secondaryText}>Leave Anyway</Text>
+                        </Pressable>
+                    </View>
+                </View>
+            </Modal>}
             <Text style={styles.title}>{existingRestaurant ? "Add a Visit" : "Add Restaurant / Visit"}</Text>
             <Text style={styles.message}>Restaurant facts are shared. Your visit is private to each selected group.</Text>
             {loading && <Text style={styles.message}>Loading groups and restaurant...</Text>}
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
             <Text style={styles.label}>Restaurant name</Text>
-            <TextInput accessibilityLabel="Restaurant name" value={name} onChangeText={setName} maxLength={100} editable={!saving && !existingRestaurant} placeholder="Restaurant name" placeholderTextColor="#79665E" style={styles.input} />
+            <TextInput accessibilityLabel="Restaurant name" value={name} onChangeText={value => { if (locked) return; setName(value); appleSelection.current = null; setAppleReset(v => v + 1); }} maxLength={100} editable={!locked && !existingRestaurant} placeholder="Restaurant name" placeholderTextColor="#79665E" style={styles.input} />
             <Text style={styles.label}>Address</Text>
             {existingRestaurant ? <TextInput accessibilityLabel="Restaurant address" value={address} maxLength={300} editable={false} placeholder="Full address, including city" placeholderTextColor="#79665E" style={styles.input} /> :
-                <AddressAutocomplete {...autocomplete} value={address} selection={addressSelection} editable={!saving}
+                <AddressAutocomplete {...autocomplete} value={address} selection={addressSelection} editable={!locked}
                     active={isFocused && isActive && !loading && loadError === ""}
                     resetKey={`${refreshVersion}:${foregroundVersion}`} onChange={(next, selection) => {
-                        setAddress(next); setAddressSelection(selection);
+                        if (locked) return;
+                        setAddress(next); setAddressSelection(selection); appleSelection.current = null; setAppleReset(v => v + 1);
                     }} />}
+            {__DEV__ && isFocused && isActive && !loading && loadError === "" && groups.length > 0 && <ApplePlacePicker
+                key={`${appleReset}:${name}:${address}`} disabled={locked} saveDestination="group visit"
+                onSelect={id => { if (!locked && visible.current) appleSelection.current = id ? { id, address } : null; }} />}
+            {__DEV__ && <Text style={styles.message}>An Apple ID may be saved on a new group entry. Only its owner can fill an existing entry&apos;s empty ID during a visit. Existing IDs stay unchanged.</Text>}
             <Text style={styles.label}>Cuisine (optional)</Text>
-            <TextInput accessibilityLabel="Cuisine" value={cuisine} onChangeText={setCuisine} maxLength={100} editable={!saving && !existingRestaurant} placeholder="Cuisine" placeholderTextColor="#79665E" style={styles.input} />
+            <TextInput accessibilityLabel="Cuisine" value={cuisine} onChangeText={setCuisine} maxLength={100} editable={!locked && !existingRestaurant} placeholder="Cuisine" placeholderTextColor="#79665E" style={styles.input} />
             <Text style={styles.message}>{existingRestaurant ? "These shared facts stay unchanged when you add a visit." : "An exact name and address match reuses existing facts. Different locations stay separate."}</Text>
             <Text style={styles.label}>Visit date (optional)</Text>
-            <TextInput accessibilityLabel="Visit date" value={visitedOn} onChangeText={setVisitedOn} maxLength={10} editable={!saving} placeholder="YYYY-MM-DD" placeholderTextColor="#79665E" autoCorrect={false} style={styles.input} />
+            <TextInput accessibilityLabel="Visit date" value={visitedOn} onChangeText={setVisitedOn} maxLength={10} editable={!locked} placeholder="YYYY-MM-DD" placeholderTextColor="#79665E" autoCorrect={false} style={styles.input} />
             <Text style={styles.label}>Rating (optional, 1–5)</Text>
             <View style={formStyles.row}>
                 {[1, 2, 3, 4, 5].map(value => (
-                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`Rating ${value} out of 5`} accessibilityState={{ selected: rating === value }} disabled={saving} onPress={() => setRating(rating === value ? null : value)} style={[formStyles.choice, rating === value && formStyles.selected]}>
+                    <Pressable key={value} accessibilityRole="button" accessibilityLabel={`Rating ${value} out of 5`} accessibilityState={{ selected: rating === value }} disabled={locked} onPress={() => setRating(rating === value ? null : value)} style={[formStyles.choice, rating === value && formStyles.selected]}>
                         <Text style={rating === value ? styles.primaryText : styles.secondaryText}>{value}</Text>
                     </Pressable>
                 ))}
@@ -208,14 +313,14 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             <Text style={styles.label}>Would you go again? (optional)</Text>
             <View style={formStyles.row}>
                 {[true, false].map(value => (
-                    <Pressable key={String(value)} accessibilityRole="button" accessibilityState={{ selected: wouldGoAgain === value }} disabled={saving} onPress={() => setWouldGoAgain(wouldGoAgain === value ? null : value)} style={[formStyles.choice, wouldGoAgain === value && formStyles.selected]}>
+                    <Pressable key={String(value)} accessibilityRole="button" accessibilityState={{ selected: wouldGoAgain === value }} disabled={locked} onPress={() => setWouldGoAgain(wouldGoAgain === value ? null : value)} style={[formStyles.choice, wouldGoAgain === value && formStyles.selected]}>
                         <Text style={wouldGoAgain === value ? styles.primaryText : styles.secondaryText}>{value ? "Yes" : "No"}</Text>
                     </Pressable>
                 ))}
             </View>
             <Text style={styles.message}>Tap a selected choice again to leave it unanswered.</Text>
             <Text style={styles.label}>Notes (optional)</Text>
-            <TextInput accessibilityLabel="Visit notes" value={notes} onChangeText={setNotes} maxLength={4000} multiline editable={!saving} placeholder="A memory from this visit" placeholderTextColor="#79665E" style={[styles.input, formStyles.notes]} />
+            <TextInput accessibilityLabel="Visit notes" value={notes} onChangeText={setNotes} maxLength={4000} multiline editable={!locked} placeholder="A memory from this visit" placeholderTextColor="#79665E" style={[styles.input, formStyles.notes]} />
             <Text style={styles.label}>Save to groups</Text>
             {!loading && loadError === "" && groups.length === 0 && (
                 <>
@@ -228,15 +333,18 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             {groups.map(group => {
                 const selected = selectedGroups.includes(group.id);
                 return (
-                    <Pressable key={group.id} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} disabled={saving || loading} onPress={() => setSelectedGroups(ids => selected ? ids.filter(id => id !== group.id) : [...ids, group.id])} style={[styles.card, selected && formStyles.selected]}>
+                    <Pressable key={group.id} accessibilityRole="checkbox" accessibilityState={{ checked: selected }} disabled={locked || loading} onPress={() => setSelectedGroups(ids => selected ? ids.filter(id => id !== group.id) : [...ids, group.id])} style={[styles.card, selected && formStyles.selected]}>
                         <Text style={selected ? styles.primaryText : styles.cardTitle}>{selected ? "✓ " : ""}{group.name}</Text>
                     </Pressable>
                 );
             })}
             {error !== "" && <Text style={styles.error}>{error}</Text>}
-            <Pressable accessibilityRole="button" disabled={saving || loading || loadError !== "" || groups.length === 0} onPress={handleSave} style={[styles.primaryButton, (saving || loading || loadError !== "" || groups.length === 0) && styles.disabled]}>
-                <Text style={styles.primaryText}>{saving ? "Saving..." : "Save Visit"}</Text>
-            </Pressable>
+            {completed ? <>
+                <Text style={styles.message}>Visit saved. Returning to your groups will not save it again.</Text>
+                <Pressable accessibilityRole="button" onPress={finishSubmission} style={styles.primaryButton}><Text style={styles.primaryText}>Continue to Groups</Text></Pressable>
+            </> : <Pressable accessibilityRole="button" disabled={saving || (!submissionLocked && (loading || loadError !== "" || groups.length === 0))} onPress={handleSave} style={[styles.primaryButton, saving && styles.disabled]}>
+                <Text style={styles.primaryText}>{saving ? "Saving..." : submissionLocked ? "Retry Same Visit Save" : "Save Visit"}</Text>
+            </Pressable>}
             <Pressable accessibilityRole="button" disabled={saving || loading} onPress={() => setRefreshVersion(value => value + 1)} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>Refresh Groups</Text>
             </Pressable>
@@ -245,6 +353,8 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
 }
 
 const formStyles = StyleSheet.create({
+    confirmationOverlay: { flex: 1, backgroundColor: "rgba(0, 0, 0, 0.5)", justifyContent: "center", alignItems: "center", padding: 24 },
+    confirmationCard: { width: "100%", maxWidth: 480 },
     row: { flexDirection: "row", flexWrap: "wrap", gap: 8, marginBottom: 16 },
     choice: { minWidth: 48, minHeight: 48, paddingHorizontal: 16, alignItems: "center", justifyContent: "center", borderWidth: 1, borderColor: "#E85D3F", borderRadius: 12 },
     selected: { backgroundColor: "#E85D3F", borderColor: "#E85D3F" },

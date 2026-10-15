@@ -25,6 +25,7 @@ export function restaurantErrorMessage(error: unknown): string {
         case "Enter a restaurant name and address.":
         case "Choose at least one group.":
         case "Check the optional visit fields.":
+        case "Enter a valid Apple Place ID.":
             return message;
         case "Sign in first.":
             return "Please sign in before saving a visit.";

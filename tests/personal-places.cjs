@@ -22,7 +22,7 @@ function defer() { let resolve; const promise = new Promise(r => { resolve = r; 
 function runtime(options = {}) {
     const world = { auth: { loading: false, error: '', session: { user: { id: 'a' }, access_token: 'fake-a' } },
         focused: true, params: {}, rows: [], requests: [], navigation: [], listeners: new Set(), override: null,
-        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localReads: 0, localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [] };
+        local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localReads: 0, localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [], removalGuards: new Set() };
     let nextId = 2;
     async function fetchOffline(input, init) {
         const url = new URL(input), method = init.method ?? 'GET', headers = new Headers(init.headers);
@@ -96,15 +96,21 @@ function runtime(options = {}) {
     const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
     const router = options.router ?? { push: x => world.navigation.push(x), navigate: x => world.navigation.push(x), replace: x => world.navigation.push(x), dismissTo: x => world.navigation.push(x),
         canGoBack: () => world.canGoBack !== false, back: () => world.navigation.push('BACK') };
+    const navigation = { dispatch: action => options.navigationDispatch
+        ? options.navigationDispatch(action) : world.navigation.push(action) };
     const mocks = {
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { AppState: appState, ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
+        'react-native': { AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
             Linking: { async openURL(url) { world.links.push(url); } }, Platform: { OS: options.platform ?? 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
         'expo-router': { Redirect: 'Redirect', useRouter: () => router, useLocalSearchParams: () => world.params,
             useGlobalSearchParams: () => world.params, usePathname: () => world.pathname ?? '/',
             Stack: Object.assign(props => ({ type: 'Stack', props }), { Screen: 'StackScreen' }),
             useFocusEffect: cb => react.useEffect(() => world.focused ? cb() : undefined, [world.focused, cb]) },
-        '@react-navigation/native': { useIsFocused: () => world.focused },
+        '@react-navigation/native': { useIsFocused: () => world.focused, useNavigation: () => navigation,
+            usePreventRemove(enabled, callback) {
+                const guard = react.useRef(); guard.current = { enabled, callback };
+                react.useEffect(() => { world.removalGuards.add(guard); return () => world.removalGuards.delete(guard); }, []);
+            } },
         '@/lib/supabase': { supabase, supabasePublicConfig: { url: 'https://abcdefghijklmnopqrst.supabase.co', publishableKey: 'sb_publishable_offline_test' } },
         '@/providers/auth': { useAuth: () => world.auth },
         '@/providers/legacy-archive': { useLegacyArchive: () => ({ allowed: options.archiveAllowed ?? true, allow: () => {} }) },
@@ -171,7 +177,13 @@ function runtime(options = {}) {
         };
         return renderer;
     }
-    return { world, load, render, supabase, emit(state) { appState.currentState = state; [...world.listeners].forEach(fn => fn(state)); }, switch(user, renderer) {
+    return { world, load, render, supabase,
+        attemptRemoval(action, proceed = () => navigation.dispatch(action)) {
+            const guard = [...world.removalGuards].find(guard => guard.current.enabled);
+            if (guard) { guard.current.callback({ data: { action } }); return true; }
+            proceed(); return false;
+        },
+        emit(state) { appState.currentState = state; [...world.listeners].forEach(fn => fn(state)); }, switch(user, renderer) {
         world.auth = { loading: false, error: '', session: user ? { user: { id: user }, access_token: 'fake-' + user } : null };
         if (renderer) renderer.dirty = true;
     } };

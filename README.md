@@ -137,3 +137,7 @@ Manual iPhone simulator checks using the existing configured development app:
 
 Saving a mock address saves its fictional text through the normal save flow;
 there is no coordinate attachment. Use disposable test entries for these checks.
+
+## Milestone 16D: group Apple Place IDs
+
+Migration 14 was deployed to hosted GroupBite; migrations 1–14 are synchronized and all 11 read-only post-deployment verification checks passed, as confirmed by the owner. Group Apple Place ID support adds atomic visit/ID saving, owner-only NULL fills, exact frozen retries, shared-address invalidation, and development-only group picker/detail lookup. Apple functionality remains development-only. Migrations 1–13 remain unchanged. Manual release-binary and after-commit response-loss simulator coverage remain pending, along with separate hosted `rls_auto_enable()` / `ensure_rls` provenance verification and documentation. See [the contract, validation commands and simulator acceptance results](docs/milestone-16d-group-apple-place-ids.md).

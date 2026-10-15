@@ -335,3 +335,7 @@ Runtime/Auth/gateway behavior and cold/warm latency within 800 ms still require
 verification with Geoapify disabled. Extra readback latency may safely abandon
 charged reservations; never extend the permit or weaken the quota guard to
 compensate.
+
+## Migration 14: group Apple Place IDs
+
+`migrations/20261013001400_group_apple_place_ids.sql` was deployed to hosted GroupBite; migrations 1–14 are synchronized and all 11 read-only post-deployment verification checks passed, as confirmed by the owner. It adds a validated optional ID to group entries, a separate atomic Apple-aware visit RPC, a current-member group/entry ID read RPC, and shared-address invalidation. It preserves old RPC signatures, fingerprints, receipts, Geoapify, RLS and direct client grants. Apple functionality remains development-only; SQL permissions apply in every build. Manual release-binary and after-commit response-loss simulator coverage remain pending. Hosted `rls_auto_enable()` / `ensure_rls` provenance verification and documentation remain a separate pending task. Do not reapply migrations 1–13. The [16D contract and acceptance guide](../docs/milestone-16d-group-apple-place-ids.md) records manual results, offline coverage, permissions, exact retries and the disposable SQL/concurrency runner; never run its synthetic fixtures against hosted data.

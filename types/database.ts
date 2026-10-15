@@ -88,6 +88,7 @@ export type PersonalPlace = PersonalPlaceFields & {
 };
 
 export type GroupRestaurant = {
+    apple_place_id?: string | null;
     id: string;
     group_id: string;
     restaurant_id: string;
@@ -257,6 +258,14 @@ export type Database = {
             remove_group_member: { Args: { target_group_id: string; target_user_id: string; expected_membership_id: string }; Returns: undefined };
             transfer_group_ownership: { Args: { target_group_id: string; target_user_id: string; expected_membership_id: string }; Returns: undefined };
             save_restaurant_visit: { Args: SaveVisitArgs; Returns: string };
+            save_restaurant_visit_with_apple_place_id: {
+                Args: SaveVisitArgs & { restaurant_apple_place_id?: string | null };
+                Returns: { restaurant_id: string; bindings_recorded: boolean }[];
+            };
+            get_group_restaurant_apple_place_id: {
+                Args: { target_group_id: string; target_group_restaurant_id: string };
+                Returns: { group_id: string; group_restaurant_id: string; apple_place_id: string | null }[];
+            };
             update_group_visit: { Args: UpdateVisitArgs; Returns: undefined };
             delete_group_visit: { Args: VisitScope; Returns: boolean };
             get_group_restaurants: { Args: { target_group_id: string }; Returns: GroupRestaurantSummary[] };
