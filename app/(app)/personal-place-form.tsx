@@ -1,3 +1,6 @@
+import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
+import { useIsFocused } from "@react-navigation/native";
+import { useLeaveGuard } from "@/hooks/use-leave-guard";
 import { PersonalAccess } from "@/components/personal-access";
 import PersonalApplePlacePicker from "@/components/personal-apple-place-picker";
 import { PersonalPlaceFields } from "@/components/personal-place-fields";
@@ -20,10 +23,9 @@ const APPLE_PLACE_ID_SAVING_ENABLED: boolean = __DEV__;
 export default function PersonalPlaceFormScreen() {
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
     const { session, loading } = useAuth();
-    // Only creation keeps an account-scoped, in-memory draft above the gate.
-    // Sign-out/account changes dispose it; the visible form still unmounts.
-    if (id === undefined && !loading && session) {
-        return <PersonalPlaceForm key={session.user.id} userId={session.user.id} />;
+    // Account/record-scoped state survives temporary hiding; private UI does not.
+    if (!loading && session) {
+        return <PersonalPlaceForm key={`${session.user.id}:${JSON.stringify(id)}`} userId={session.user.id} id={id} />;
     }
     return <PersonalAccess title={id === undefined ? "Add Personal Place" : "Edit Personal Place"}>{userId => <PersonalPlaceForm key={`${userId}:${JSON.stringify(id)}`} userId={userId} id={id} />}</PersonalAccess>;
 }
@@ -31,6 +33,8 @@ export default function PersonalPlaceFormScreen() {
 function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | string[] }) {
     const router = useRouter();
     const autocomplete = useAddressSearch();
+    const baseline = useRef<Fields>(empty);
+    const completed = useRef(false);
     const [fields, setFields] = useState<Fields>(empty);
     const [place, setPlace] = useState<PersonalPlace | null>(null);
     const [loading, setLoading] = useState(id !== undefined);
@@ -39,45 +43,72 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
     const [busy, setBusy] = useState(false);
     const [blocked, setBlocked] = useState(false);
     const [refresh, setRefresh] = useState(0);
+    const focused = useIsFocused();
+    const { isActive, version: foregroundVersion } = useForegroundRefresh();
+    const [editVerified, setEditVerified] = useState(id === undefined);
+    const verified = useRef(id === undefined);
+    const loadedPlace = useRef<PersonalPlace | null>(null);
     const mounted = useRef(false);
     const submitting = useRef(false);
     const blockedRef = useRef(false);
     const submission = useRef<{ requestId: string } | null>(null);
     const appleSelection = useRef<{ id: string; address: string } | null>(null);
     const visibility = useRef({ active: false, epoch: 0 });
+    const leave = useLeaveGuard({ userId, dirty: JSON.stringify(fields) !== JSON.stringify(baseline.current),
+        busy, uncertain: blocked, onDiscard: clearCreateDraft });
     useEffect(() => {
         mounted.current = true;
+        // Also covers batched inactive -> active transitions before React renders.
+        const subscription = AppState.addEventListener("change", state => {
+            if (state !== "active") {
+                visibility.current.epoch++;
+                if (id !== undefined) verified.current = false;
+            }
+        });
+        return () => { mounted.current = false; subscription.remove(); };
+    }, [id]);
+
+    useEffect(() => {
+        if (id === undefined) return;
+        verified.current = false; setEditVerified(false);
+        setLoading(true); setLoadError(""); appleSelection.current = null;
+        if (!focused || !isActive) return;
         let active = true;
-        setFields(empty); setPlace(null); setError(""); setLoadError(""); setBlocked(false);
-        blockedRef.current = false;
-        appleSelection.current = null;
-        // Invalidate navigation even if inactive -> active is batched by React.
-        const subscription = id === undefined ? AppState.addEventListener("change", state => {
-            if (state !== "active") visibility.current.epoch++;
-        }) : null;
-        if (id !== undefined) {
-            setLoading(true);
-            if (!isUuid(id)) { setLoadError("This place could not be found or is unavailable."); setLoading(false); }
-            else getPersonalPlace(userId, id).then(data => {
-                if (!active) return;
-                if (!data) { setLoadError("This place could not be found or is unavailable."); return; }
-                setPlace(data);
-                setFields({ name: data.name, address: data.address, cuisine: data.cuisine, visited_on: data.visited_on, rating: data.rating, would_go_again: data.would_go_again, notes: data.notes });
-            }).catch(error => { if (active) setLoadError(personalPlaceErrorMessage(error)); })
-                .finally(() => { if (active) setLoading(false); });
+        if (!isUuid(id)) {
+            setLoadError("This place could not be found or is unavailable."); setLoading(false);
+            return;
         }
-        return () => { active = false; mounted.current = false; subscription?.remove(); };
-    }, [userId, id, refresh]);
+        const readEpoch = visibility.current.epoch;
+        getPersonalPlace(userId, id).then(data => {
+            if (!active || visibility.current.epoch !== readEpoch || AppState.currentState !== "active") return;
+            if (!data) { setLoadError("This place could not be found or is unavailable."); return; }
+            if (!loadedPlace.current) {
+                loadedPlace.current = data; setPlace(data);
+                const loaded = { name: data.name, address: data.address, cuisine: data.cuisine, visited_on: data.visited_on, rating: data.rating, would_go_again: data.would_go_again, notes: data.notes };
+                baseline.current = loaded; setFields(loaded);
+            } else if (loadedPlace.current.revision !== data.revision) {
+                // Preserve the draft and original optimistic revision; never silently
+                // rebase old edits onto a newer saved memory.
+                blockedRef.current = true; setBlocked(true);
+                setError("This place changed while you were away. Your draft is retained. Cancel and refresh before editing again.");
+            }
+            verified.current = true; setEditVerified(true);
+        }).catch(error => { if (active) setLoadError(personalPlaceErrorMessage(error)); })
+            .finally(() => { if (active) setLoading(false); });
+        return () => { active = false; };
+    }, [userId, id, refresh, focused, isActive, foregroundVersion]);
 
     function back() {
         if (submitting.current) return;
-        clearCreateDraft();
-        if (router.canGoBack()) router.back();
-        else if (isUuid(id)) router.replace({ pathname: "/personal-place/[id]", params: { id } });
-        else router.replace("/my-places");
+        leave.requestLeave(() => {
+            if (router.canGoBack()) router.back();
+            else if (isUuid(id)) router.replace({ pathname: "/personal-place/[id]", params: { id } });
+            else router.replace("/my-places");
+        });
     }
     function open(saved: PersonalPlace) {
-        router.dismissTo({ pathname: "/personal-place/[id]", params: { id: saved.id } });
+        completed.current = true;
+        leave.finish(() => router.dismissTo({ pathname: "/personal-place/[id]", params: { id: saved.id } }, { withAnchor: true }));
     }
     function clearCreateDraft() {
         if (id !== undefined) return;
@@ -88,7 +119,8 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
     }
     function confirmed(saved: PersonalPlace, epoch: number) {
         if (!mounted.current) return;
-        const canOpen = visibility.current.active && visibility.current.epoch === epoch && AppState.currentState === "active";
+        const canOpen = visibility.current.active && visibility.current.epoch === epoch && AppState.currentState === "active"
+            && (id === undefined || verified.current);
         if (id === undefined) {
             setFields(empty);
             appleSelection.current = null;
@@ -97,10 +129,14 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
             blockedRef.current = true; setBlocked(true);
             setError(canOpen ? "" : "This place was saved. Check the saved result or review My Places.");
         }
+        if (id !== undefined && !canOpen) {
+            blockedRef.current = true; setBlocked(true);
+            setError("This place was saved. Cancel and refresh the place to review it; this form will not save again.");
+        }
         if (canOpen) open(saved);
     }
     async function save() {
-        if (!mounted.current || !visibility.current.active || submitting.current || busy || loading || loadError || blockedRef.current || blocked) return;
+        if (!mounted.current || completed.current || !visibility.current.active || (id !== undefined && !verified.current) || AppState.currentState !== "active" || submitting.current || busy || loading || loadError || blockedRef.current || blocked) return;
         setError("");
         let value: Fields;
         try { value = normalizePersonalPlace(fields); }
@@ -109,7 +145,8 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
         const epoch = visibility.current.epoch;
         if (id === undefined) submission.current = { requestId: `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}` };
         try {
-            const saved = place ? await updatePersonalPlace(userId, place, value)
+            const saved = place ? await updatePersonalPlace(userId, place, value, () => mounted.current && visibility.current.active && verified.current
+                    && visibility.current.epoch === epoch && AppState.currentState === "active")
                 : await createPersonalPlace(userId, value, submission.current!.requestId,
                     APPLE_PLACE_ID_SAVING_ENABLED && appleSelection.current?.address === fields.address ? appleSelection.current.id : undefined);
             confirmed(saved, epoch);
@@ -141,12 +178,13 @@ function PersonalPlaceForm({ userId, id }: { userId: string; id?: string | strin
             if (mounted.current) setBusy(false);
         }
     }
-    const form = <PersonalPlaceFormBody key={refresh} autocomplete={autocomplete} id={id} fields={fields} setFields={setFields} loading={loading} loadError={loadError}
+    const form = <PersonalPlaceFormBody key={refresh} autocomplete={autocomplete} id={id} fields={fields} setFields={setFields} loading={loading || (id !== undefined && (!editVerified || !verified.current) && !loadError)} loadError={loadError}
         error={error} busy={busy} blocked={blocked} back={back} save={save} checkSavedResult={checkSavedResult}
-        review={() => { if (!submitting.current) { clearCreateDraft(); router.dismissTo("/my-places"); } }}
-        cancelEdit={() => { if (isUuid(id)) router.dismissTo({ pathname: "/personal-place/[id]", params: { id } }); }}
+        review={() => { if (!submitting.current) leave.requestLeave(() => router.dismissTo("/my-places", { withAnchor: true })); }}
+        cancelEdit={() => { if (isUuid(id)) leave.requestLeave(() => router.dismissTo({ pathname: "/personal-place/[id]", params: { id } }, { withAnchor: true })); }}
         refresh={() => setRefresh(value => value + 1)} visibility={visibility} appleSelection={appleSelection} />;
-    return id === undefined ? <PersonalAccess title="Add Personal Place">{() => form}</PersonalAccess> : form;
+    const guardedForm = <>{leave.confirmation}{form}</>;
+    return <PersonalAccess title={id === undefined ? "Add Personal Place" : "Edit Personal Place"}>{() => guardedForm}</PersonalAccess>;
 }
 
 function PersonalPlaceFormBody({ autocomplete, id, fields, setFields, loading, loadError, error, busy, blocked, back, save, checkSavedResult, review, cancelEdit, refresh, visibility, appleSelection }: {

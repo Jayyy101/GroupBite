@@ -31,6 +31,7 @@ function clock() {
 function deferred() { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; }
 function backend(call) {
     if (call.url.pathname === '/rest/v1/groups') return response([{ id: group, name: 'Dinner', owner_user_id: taylor }]);
+    if (call.url.pathname === '/rest/v1/rpc/get_group_restaurants') return response([{ id: '55555555-5555-5555-5555-555555555555', restaurant_id: '44444444-4444-4444-4444-444444444444' }]);
     if (call.url.pathname === '/rest/v1/rpc/save_restaurant_visit') return response('44444444-4444-4444-4444-444444444444');
     if (call.url.pathname === '/rest/v1/personal_places' && call.method === 'POST') return response(fixture({ ...call.body, owner_user_id: taylor }), 201);
     assert.fail('Unexpected backend path ' + call.url.pathname);
@@ -130,7 +131,7 @@ async function test(label, fn) { await fn(); passed++; console.log('PASS ' + lab
         await test(`${name}: the opt-in selection preserves original saves without coordinates, receipts or attachment calls`, async () => {
             const f = setup(), r = screen(f.rt, name); await r.settle(); await enter(r, 'Restaurant name', 'Test Cafe'); await search(f, r);
             rows(r)[0].props.onPress(); await r.settle(); await click(r, name === 'add-visit' ? 'Save Visit' : 'Save Personal Place');
-            const posts = f.rt.world.requests.filter(c => c.method === 'POST'); assert.equal(posts.length, 1);
+            const posts = f.rt.world.requests.filter(c => c.method === 'POST' && !c.url.pathname.endsWith('/get_group_restaurants'));  assert.equal(posts.length, 1);
             const keys = name === 'add-visit' ? ['client_request_id', 'restaurant_address', 'restaurant_cuisine', 'restaurant_name', 'target_group_ids', 'visit_date', 'visit_notes', 'visit_rating', 'visit_would_go_again']
                 : ['address', 'client_request_id', 'cuisine', 'name', 'notes', 'rating', 'visited_on', 'would_go_again'];
             assert.deepEqual(Object.keys(posts[0].body).sort(), keys.sort()); assert.equal(posts[0].body.address ?? posts[0].body.restaurant_address, address);

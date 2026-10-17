@@ -180,7 +180,7 @@ function layoutRuntime() {
         assert.equal(appNode.children.find(n => n.route === '(tabs)').children.length, 5);
         // Exercise installed routing action selection across the new tab/stack boundary.
         const stack = StackRouter({}), tab = TabRouter({ backBehavior: 'history', initialRouteName: 'index' });
-        const tabOptions = { routeNames: ['index', 'my-places', 'add', 'groups', 'account'], routeParamList: {}, routeGetIdList: {} };
+        const tabOptions = { routeNames: ['index', '(my-places)', 'add', '(groups)', '(account)'], routeParamList: {}, routeGetIdList: {} };
         let tabState = tab.getInitialState(tabOptions);
         const appOptions = { routeNames: appNode.children.map(n => n.route), routeParamList: {}, routeGetIdList: {} };
         let appState = stack.getRehydratedState({ stale: true, routes: [{ name: '(tabs)', state: tabState }, { name: 'add-visit' }], index: 1 }, appOptions);
@@ -190,7 +190,7 @@ function layoutRuntime() {
         appState = stack.getStateForAction(appState, action, appOptions);
         assert.equal(appState.routes.length, 1); assert.equal(appState.routes[0].name, '(tabs)');
         tabState = tab.getStateForAction(tabState, { type: 'NAVIGATE', payload: { name: action.payload.params.screen, params: action.payload.params.params } }, tabOptions);
-        assert.equal(tabState.routes[tabState.index].name, 'groups');
+        assert.equal(tabState.routes[tabState.index].name, '(groups)');
     });
     console.log(`${passed} offline authentication/navigation checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,6 +1,8 @@
+import { useLeaveGuard } from "@/hooks/use-leave-guard";
+import { useAuth } from "@/providers/auth";
 import { getSavedPlaces, updatePlace } from "@/utils/storage";
 import { Redirect, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from "react-native";
 import { LegacyAccess } from "@/components/legacy-access";
 export default function AddPlaceScreen() {
@@ -11,6 +13,9 @@ export default function AddPlaceScreen() {
 
 function LegacyPlaceEditor({ id }: { id: string | string[] }) {
     const router = useRouter();
+    const { session } = useAuth();
+    const baseline = useRef("");
+    const mounted = useRef(true), submitting = useRef(false), completed = useRef(false);
     const [name, setName] = useState("");
     const [cuisine, setCuisine] = useState("");
     const [notes, setNotes] = useState("");
@@ -21,6 +26,12 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
     const [loadError, setLoadError] = useState("");
     const [saving, setSaving] = useState(false);
 
+    const valueKey = JSON.stringify([name, cuisine, notes, rating, wouldGoAgain]);
+    const leave = useLeaveGuard({ userId: session?.user.id, dirty: !loading && !loadError && valueKey !== baseline.current, busy: saving });
+    useEffect(() => {
+        mounted.current = true;
+        return () => { mounted.current = false; };
+    }, []);
     useEffect(() => {
         let active = true;
 
@@ -43,6 +54,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
                     return;
                 }
 
+                baseline.current = JSON.stringify([place.name, place.cuisine ?? "", place.notes ?? "", place.rating, place.wouldGoAgain]);
                 setName(place.name);
                 setCuisine(place.cuisine ?? "");
                 setNotes(place.notes ?? "");
@@ -63,7 +75,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
     }, [id]);
 
     async function handleSave() {
-        if (typeof id !== "string" || loading || loadError !== "" || saving) return;
+        if (!mounted.current || submitting.current || completed.current || typeof id !== "string" || loading || loadError !== "" || saving) return;
 
         if (name.trim() === "") {
             setError("Please enter a place name.");
@@ -71,6 +83,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
         }
 
         setError("");
+        submitting.current = true;
         setSaving(true);
         try {
             const place = {
@@ -84,13 +97,16 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
             await updatePlace(place);
         } catch (error) {
             console.error("Failed to save place:", error);
-            setError("Could not save the place. Please try again.");
+            if (mounted.current) setError("Could not save the place. Please try again.");
             return;
         } finally {
-            setSaving(false);
+            submitting.current = false;
+            if (mounted.current) setSaving(false);
         }
 
-        router.dismissTo({ pathname: "/place/[id]", params: { id } });
+        if (!mounted.current) return;
+        completed.current = true;
+        leave.finish(() => router.dismissTo({ pathname: "/place/[id]", params: { id } }, { withAnchor: true }));
     }
 
     return (
@@ -99,16 +115,17 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
             contentContainerStyle={styles.content}
             keyboardShouldPersistTaps="handled"
         >
+            {leave.confirmation}
             <Pressable
                 accessibilityRole="button"
                 disabled={saving}
-                onPress={() => {
+                onPress={() => leave.requestLeave(() => {
                     if (router.canGoBack()) {
                         router.back();
                     } else {
                         router.replace("/saved-places");
                     }
-                }}
+                })}
                 style={styles.backButton}
             >
                 <Text style={styles.backButtonText}>Back</Text>
@@ -123,6 +140,8 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
             ) : (
                 <View>
                     <TextInput
+                        editable={!saving}
+                        accessibilityLabel="Place name"
                         value={name}
                         onChangeText={setName}
                         placeholder="Enter a name"
@@ -131,6 +150,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
                     />
 
                     <TextInput
+                        editable={!saving}
                         value={cuisine}
                         onChangeText={setCuisine}
                         placeholder="Cuisine (optional)"
@@ -139,6 +159,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
                     />
 
                     <TextInput
+                        editable={!saving}
                         value={notes}
                         onChangeText={setNotes}
                         placeholder="Notes (optional)"
@@ -153,6 +174,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
                             <Pressable
                                 key={value}
                                 accessibilityRole="button"
+                                disabled={saving}
                                 accessibilityLabel={`Rating ${value} out of 5`}
                                 accessibilityState={{ selected: rating === value }}
                                 onPress={() => setRating(rating === value ? undefined : value)}
@@ -171,6 +193,7 @@ function LegacyPlaceEditor({ id }: { id: string | string[] }) {
                             <Pressable
                                 key={String(value)}
                                 accessibilityRole="button"
+                                disabled={saving}
                                 accessibilityState={{ selected: wouldGoAgain === value }}
                                 onPress={() => setWouldGoAgain(wouldGoAgain === value ? undefined : value)}
                                 style={[styles.choiceButton, wouldGoAgain === value && styles.selectedChoice]}

@@ -1,11 +1,13 @@
+import { backendStyles } from "@/styles/backend";
+import { ScreenScaffold } from "@/components/screen-scaffold";
 import { useRouter } from "expo-router";
-import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 
 export default function Index() {
   const router = useRouter();
 
   return (
-    <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    <ScreenScaffold contentContainerStyle={{ paddingTop: 24 }}>
       <Text style={styles.welcomeText}>Welcome to</Text>
       <Text style={styles.title}>GroupBite</Text>
       <Text style={styles.description}>
@@ -23,9 +25,9 @@ export default function Index() {
       <Pressable
         accessibilityRole="button"
         onPress={() => router.push("/my-places")}
-        style={styles.secondaryButton}
+        style={[backendStyles.secondaryButton, styles.secondaryButton]}
       >
-        <Text style={styles.secondaryButtonText}>My Places</Text>
+        <Text style={backendStyles.secondaryText}>My Places</Text>
       </Pressable>
 
       <View style={styles.emptyState}>
@@ -38,24 +40,15 @@ export default function Index() {
       <Pressable
         accessibilityRole="button"
         onPress={() => router.push("/groups")}
-        style={styles.secondaryButton}
+        style={[backendStyles.secondaryButton, styles.secondaryButton]}
       >
-        <Text style={styles.secondaryButtonText}>Groups</Text>
+        <Text style={backendStyles.secondaryText}>Groups</Text>
       </Pressable>
-    </ScrollView>
+    </ScreenScaffold>
   );
 }
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: "#FFF8F0",
-  },
-  content: {
-    paddingHorizontal: 24,
-    paddingTop: 80,
-    paddingBottom: 32,
-  },
   welcomeText: {
     color: "#7A5C4F",
     fontSize: 18,
@@ -75,7 +68,7 @@ const styles = StyleSheet.create({
   },
   primaryButton: {
     alignItems: "center",
-    backgroundColor: "#E85D3F",
+    backgroundColor: "#C9472C",
     borderRadius: 14,
     marginTop: 36,
     paddingVertical: 16,
@@ -85,19 +78,7 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: "600",
   },
-  secondaryButton: {
-    alignItems: "center",
-    borderColor: "#E85D3F",
-    borderRadius: 14,
-    borderWidth: 2,
-    marginTop: 12,
-    paddingVertical: 14,
-  },
-  secondaryButtonText: {
-    color: "#C9472C",
-    fontSize: 17,
-    fontWeight: "600",
-  },
+  secondaryButton: { marginTop: 12, marginBottom: 0 },
   emptyState: {
     backgroundColor: "#FFFFFF",
     borderRadius: 18,

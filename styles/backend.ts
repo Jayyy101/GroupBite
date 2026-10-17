@@ -12,7 +12,7 @@ export const backendStyles = StyleSheet.create({
         paddingVertical: 14, fontSize: 17, marginBottom: 16,
     },
     primaryButton: {
-        backgroundColor: "#E85D3F", alignItems: "center", justifyContent: "center",
+        backgroundColor: "#C9472C", alignItems: "center", justifyContent: "center",
         minHeight: 56, borderRadius: 14, marginBottom: 16, paddingHorizontal: 16,
     },
     primaryText: { color: "#FFFFFF", fontSize: 17, fontWeight: "600" },
@@ -30,5 +30,11 @@ export const backendStyles = StyleSheet.create({
         borderRadius: 12, padding: 16, marginBottom: 12,
     },
     cardTitle: { color: "#2D1F1A", fontSize: 17, fontWeight: "600" },
+    cardBody: { gap: 8 },
+    cardMessage: { marginBottom: 0 },
+    cardHeading: { flexDirection: "row", alignItems: "center", gap: 12 },
+    cardHeadingText: { flex: 1, minWidth: 0 },
+    cardActions: { marginTop: 16, gap: 12 },
+    cardAction: { marginBottom: 0 },
     disabled: { opacity: 0.6 },
 });

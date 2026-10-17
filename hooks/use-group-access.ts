@@ -13,9 +13,11 @@ export function useGroupAccess(groupId: string, userId: string, refreshVersion: 
     const [access, setAccess] = useState<GroupAccess | null>(null);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState("");
+    const [revoked, setRevoked] = useState(false);
 
     useEffect(() => {
         setAccess(null);
+        setRevoked(false);
         setError("");
         setLoading(true);
         if (!isFocused) return;
@@ -36,8 +38,10 @@ export function useGroupAccess(groupId: string, userId: string, refreshVersion: 
                 if (!active || request !== generation) return;
                 setError("");
                 if (!group.data || !membership.data) {
+                    setRevoked(true);
                     setAccess(null);
                 } else {
+                    setRevoked(false);
                     const next = { group: group.data, membershipId: membership.data.membership_id };
                     setAccess(previous => previous?.membershipId === next.membershipId
                         && previous.group.owner_user_id === next.group.owner_user_id
@@ -75,5 +79,6 @@ export function useGroupAccess(groupId: string, userId: string, refreshVersion: 
         };
     }, [groupId, userId, isFocused, refreshVersion]);
 
-    return { access, loading, error };
+    // A temporary hide/read failure is different from confirmed membership loss.
+    return { access, loading, error, revoked };
 }

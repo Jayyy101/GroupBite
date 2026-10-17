@@ -34,7 +34,7 @@ class VisitSaveServerRejection extends Error {
     constructor(public readonly code: string, message: string) { super(message); }
 }
 
-export async function sendGroupVisitSubmission(submission: GroupVisitSubmission, canSend: () => boolean): Promise<boolean> {
+export async function sendGroupVisitSubmission(submission: GroupVisitSubmission, canSend: () => boolean): Promise<string | false> {
     const token = await accountAccessToken(submission.userId);
     if (!canSend()) return false;
     const controller = new AbortController();
@@ -56,7 +56,10 @@ export async function sendGroupVisitSubmission(submission: GroupVisitSubmission,
             }
             throw result.error;
         }
-        return true;
+        const data: unknown = result.data;
+        const restaurantId = typeof data === "string" ? data : Array.isArray(data) ? data[0]?.restaurant_id : undefined;
+        if (typeof restaurantId !== "string") throw new Error("Could not confirm the saved restaurant identity.");
+        return restaurantId;
     } finally { clearTimeout(timer); }
 }
 

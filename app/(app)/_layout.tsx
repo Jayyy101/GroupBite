@@ -1,4 +1,5 @@
 import { LegacyArchiveProvider } from "@/providers/legacy-archive";
+import { GroupCreationProvider } from "@/providers/group-creation";
 import { authReturnTo } from "@/lib/auth-navigation";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
@@ -25,8 +26,10 @@ export default function AppLayout() {
     wasSignedIn.current = true;
     // Replacing an account disposes every route, draft, request and archive grant.
     return <LegacyArchiveProvider key={session.user.id}>
-        <Stack key={session.user.id} screenOptions={{ headerShown: false }}>
-            <Stack.Screen name="(tabs)" />
-        </Stack>
+        <GroupCreationProvider>
+            <Stack key={session.user.id} screenOptions={{ headerShown: false }}>
+                <Stack.Screen name="(tabs)" />
+            </Stack>
+        </GroupCreationProvider>
     </LegacyArchiveProvider>;
 }

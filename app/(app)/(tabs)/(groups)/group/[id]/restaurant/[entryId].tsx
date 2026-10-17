@@ -1,5 +1,6 @@
+import { ScreenScaffold } from "@/components/screen-scaffold";
 import GroupApplePlaceLookup from "@/components/group-apple-place-lookup";
-import { VisitManagement } from "@/components/visit-management";
+import { useVisitManagement } from "@/components/visit-management";
 import { useGroupAccess } from "@/hooks/use-group-access";
 import { isGroupAccessDenied } from "@/lib/group-errors";
 import { isUuid, visitSummary } from "@/lib/restaurant-ui";
@@ -8,8 +9,8 @@ import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { GroupRestaurantSummary, GroupVisit } from "@/types/database";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, ScrollView, Text, View } from "react-native";
+import { useEffect, useRef, useState } from "react";
+import { Pressable, Text, View } from "react-native";
 
 export default function GroupRestaurantScreen() {
     const router = useRouter();
@@ -19,13 +20,9 @@ export default function GroupRestaurantScreen() {
         return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} />;
     }
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, styles.backButton]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
-            <Text style={styles.title}>Restaurant</Text>
+        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => router.dismissTo("/groups")}>
             <Text style={styles.message}>{loading ? "Restoring your session..." : !session ? "Sign in to view group visits." : "This restaurant could not be found."}</Text>
-        </ScrollView>
+        </ScreenScaffold>
     );
 }
 
@@ -37,28 +34,51 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
     const [loadedAccessKey, setLoadedAccessKey] = useState("");
     const [error, setError] = useState("");
     const [refreshVersion, setRefreshVersion] = useState(0);
-    const [management, setManagement] = useState<{ visitId: string; action: "edit" | "delete" } | null>(null);
+    const [management, setManagement] = useState<{ visit: GroupVisit; action: "edit" | "delete"; accessKey: string; identity: number } | null>(null);
+    const nextEditor = useRef(0);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState("");
-    const { access, loading: accessLoading, error: accessError } = useGroupAccess(groupId, userId, refreshVersion);
+    const { access, loading: accessLoading, error: accessError, revoked } = useGroupAccess(groupId, userId, refreshVersion);
+    const loadedAccess = useRef<typeof access>(null);
     const accessKey = access ? `${access.membershipId}:${access.group.owner_user_id}` : "";
-    const loading = accessLoading || detailsLoading || (!!access && loadedAccessKey !== accessKey);
-    const visibleRestaurant = access && loadedAccessKey === accessKey ? restaurant : null;
+    const loading = accessLoading || detailsLoading || (!!access && (loadedAccessKey !== accessKey || loadedAccess.current !== access));
+    const visibleRestaurant = access && !loading && loadedAccessKey === accessKey ? restaurant : null;
+    const sameMembership = !!management && !revoked && (!access || management.accessKey === accessKey);
+    const editor = useVisitManagement(sameMembership ? {
+        visit: management.visit, action: management.action, identity: management.identity,
+        scope: { target_group_id: groupId, target_group_restaurant_id: entryId, target_visit_id: management.visit.id },
+        onCancel: () => setManagement(null), onBusyChange: setBusy,
+        onAccessDenied: () => {
+            setManagement(null);
+            setMessage("Your access or Visit permissions changed. Review the refreshed group before continuing.");
+            refreshAccess();
+        },
+        onComplete: entryRemoved => {
+            setManagement(null);
+            if (entryRemoved) router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
+            else { setMessage(management.action === "edit" ? "Visit updated." : "Visit deleted."); refreshAccess(); }
+        },
+    } : null, {
+        visible: !!access && !loading && !error && loadedAccessKey === accessKey,
+        canMutate: !!visibleRestaurant && !!visits.find(visit => visit.id === management?.visit.id)?.can_manage,
+    });
+
+    useEffect(() => {
+        if (management && !sameMembership) { setManagement(null); setBusy(false); }
+    }, [management, sameMembership]);
 
     function refreshAccess() {
         setRestaurant(null);
         setVisits([]);
-        setManagement(null);
-        setBusy(false);
         setRefreshVersion(value => value + 1);
     }
 
     useEffect(() => {
         setRestaurant(null);
         setVisits([]);
-        setManagement(null);
-        setBusy(false);
+        // The editor controller survives temporary access hiding and read failures.
         setLoadedAccessKey("");
+        loadedAccess.current = null;
         setDetailsLoading(!!access);
         if (!access) return;
         let active = true;
@@ -83,6 +103,7 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
                 }
             } finally {
                 if (active) {
+                    loadedAccess.current = access;
                     setLoadedAccessKey(accessKey);
                     setDetailsLoading(false);
                 }
@@ -93,11 +114,8 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
     }, [groupId, entryId, access, accessKey]);
 
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
-            <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })} style={[styles.secondaryButton, styles.backButton, busy && styles.disabled]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
-            <Text style={styles.title}>{visibleRestaurant?.name ?? "Restaurant"}</Text>
+        <ScreenScaffold edgeToEdge title={visibleRestaurant?.name ?? "Restaurant"} keyboardShouldPersistTaps="handled" busy={busy} onBack={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })}>
+            {editor.confirmation}
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {message !== "" && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}
@@ -117,51 +135,35 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
                     {visits.length === 0 && <Text style={styles.message}>No visits yet.</Text>}
                     {visits.map(visit => (
                         <View key={visit.id} style={styles.card}>
-                            <Text style={styles.cardTitle}>Added by {visit.creator_display_name}</Text>
-                            {visit.visited_on !== null && <Text style={styles.message}>Date: {visit.visited_on}</Text>}
-                            {visit.rating !== null && <Text style={styles.message}>Rating: {visit.rating}/5</Text>}
-                            {visit.would_go_again !== null && <Text style={styles.message}>Would go again: {visit.would_go_again ? "Yes" : "No"}</Text>}
-                            {visit.notes && <Text style={styles.message}>{visit.notes}</Text>}
-                            {management?.visitId === visit.id ? (
-                                <VisitManagement
-                                    key={`${visit.id}:${management.action}`}
-                                    visit={visit}
-                                    scope={{ target_group_id: groupId, target_group_restaurant_id: entryId, target_visit_id: visit.id }}
-                                    action={management.action}
-                                    onCancel={() => setManagement(null)}
-                                    onBusyChange={setBusy}
-                                    onAccessDenied={() => {
-                                        setMessage("Your access or Visit permissions changed. Review the refreshed group before continuing.");
-                                        refreshAccess();
-                                    }}
-                                    onComplete={entryRemoved => {
-                                        const action = management.action;
-                                        setManagement(null);
-                                        if (entryRemoved) {
-                                            router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
-                                        } else {
-                                            setMessage(action === "edit" ? "Visit updated." : "Visit deleted.");
-                                            refreshAccess();
-                                        }
-                                    }}
-                                />
+                            <View style={styles.cardBody}>
+                                <Text style={styles.cardTitle}>Added by {visit.creator_display_name}</Text>
+                                {visit.visited_on !== null && <Text style={[styles.message, styles.cardMessage]}>Date: {visit.visited_on}</Text>}
+                                {visit.rating !== null && <Text style={[styles.message, styles.cardMessage]}>Rating: {visit.rating}/5</Text>}
+                                {visit.would_go_again !== null && <Text style={[styles.message, styles.cardMessage]}>Would go again: {visit.would_go_again ? "Yes" : "No"}</Text>}
+                                {visit.notes && <Text style={[styles.message, styles.cardMessage]}>{visit.notes}</Text>}
+                            </View>
+                            {management?.visit.id === visit.id ? (
+                                <View style={styles.cardActions}>
+                                    {editor.editor}
+                                </View>
                             ) : visit.can_manage && (
-                                <>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visitId: visit.id, action: "edit" }); }} style={[styles.secondaryButton, management !== null && styles.disabled]}>
+                                <View style={styles.cardActions}>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visit, action: "edit", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, management !== null && styles.disabled]}>
                                         <Text style={styles.secondaryText}>Edit Visit</Text>
                                     </Pressable>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Delete visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visitId: visit.id, action: "delete" }); }} style={[styles.secondaryButton, management !== null && styles.disabled]}>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Delete visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visit, action: "delete", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, management !== null && styles.disabled]}>
                                         <Text style={styles.secondaryText}>Delete Visit</Text>
                                     </Pressable>
-                                </>
+                                </View>
                             )}
                         </View>
                     ))}
                 </>
             )}
-            <Pressable accessibilityRole="button" disabled={loading || management !== null} onPress={() => { setMessage(""); refreshAccess(); }} style={[styles.secondaryButton, (loading || management !== null) && styles.disabled]}>
+            {sameMembership && !visits.some(visit => visit.id === management?.visit.id) && editor.editor}
+            <Pressable accessibilityRole="button" disabled={loading || busy} onPress={() => { setMessage(""); refreshAccess(); }} style={[styles.secondaryButton, (loading || busy) && styles.disabled]}>
                 <Text style={styles.secondaryText}>Refresh Restaurant</Text>
             </Pressable>
-        </ScrollView>
+        </ScreenScaffold>
     );
 }

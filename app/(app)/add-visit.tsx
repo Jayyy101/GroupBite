@@ -1,3 +1,4 @@
+import { accountAccessToken } from "@/lib/account-session";
 import { AddressAutocomplete } from "@/components/address-autocomplete";
 import ApplePlacePicker from "@/components/personal-apple-place-picker";
 import { freezeGroupVisitSubmission, sendGroupVisitSubmission, isDefinitiveVisitRejection,
@@ -66,6 +67,8 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     const [submissionLocked, setSubmissionLocked] = useState(false);
     const [completed, setCompleted] = useState(false);
     const completedRef = useRef(false), uncertain = useRef(false);
+    const lifecycleEpoch = useRef(0);
+    const savedRestaurantId = useRef<string | null>(null), resolvingDestination = useRef(false);
     const appleSelection = useRef<{ id: string; address: string } | null>(null);
     const [appleReset, setAppleReset] = useState(0);
     const [confirmLeaving, setConfirmLeaving] = useState(false);
@@ -73,6 +76,10 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     const pendingLeave = useRef<(() => void) | null>(null);
     const abandoning = useRef(false);
     const locked = saving || submissionLocked;
+    const dirty = (restaurantId === undefined && (name !== "" || address !== "" || cuisine !== ""))
+        || visitedOn !== "" || rating !== null || wouldGoAgain !== null || notes !== ""
+        || (!loading && JSON.stringify([...selectedGroups].sort()) !== JSON.stringify(isUuid(groupId) && groups.some(group => group.id === groupId) ? [groupId] : []));
+    const saveWarning = saving || submissionLocked;
     const destinationAccessKey = groups.filter(group => selectedGroups.includes(group.id))
         .map(group => `${group.id}:${group.owner_user_id}`).sort().join(",");
     const mounted = useRef(false), submitting = useRef(false), visible = useRef(false);
@@ -82,7 +89,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     // Native-stack uses this hook to prevent iOS gesture dismissal as well as
     // JS removal actions. Account replacement/sign-out disposes the keyed form.
     usePreventRemove(currentAccount.current && !allowLeave && !completed
-        && (saving || uncertain.current), ({ data }) => {
+        && (saving || submissionLocked || dirty), ({ data }) => {
         requestLeave(() => navigation.dispatch(data.action));
     });
 
@@ -95,7 +102,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
 
     function requestLeave(leave: () => void) {
         if (!mounted.current || abandoning.current) return;
-        if (!currentAccount.current || completedRef.current || (!submitting.current && !uncertain.current)) {
+        if (!currentAccount.current || completedRef.current || (!submitting.current && !lastSubmission.current && !dirty)) {
             leave();
             return;
         }
@@ -121,6 +128,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
     useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     useEffect(() => {
         visible.current = isFocused && isActive;
+        if (!isFocused) lifecycleEpoch.current++;
         return () => { visible.current = false; };
     }, [isFocused, isActive]);
 
@@ -131,7 +139,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
 
     useEffect(() => {
         const subscription = AppState.addEventListener("change", state => {
-            if (state !== "active") { appleSelection.current = null; setAppleReset(value => value + 1); }
+            if (state !== "active") { lifecycleEpoch.current++; appleSelection.current = null; setAppleReset(value => value + 1); }
         });
         return () => subscription.remove();
     }, []);
@@ -209,6 +217,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             visit_would_go_again: wouldGoAgain,
             visit_notes: notes.trim() || null,
         };
+        const epoch = lifecycleEpoch.current;
         const retryingUncertainSave = uncertain.current;
         const submission = lastSubmission.current ?? freezeGroupVisitSubmission(userId, details,
             __DEV__ && appleSelection.current?.address === address ? appleSelection.current.id : undefined);
@@ -218,9 +227,10 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
         submitting.current = true;
         setSaving(true);
         try {
-            const sent = await sendGroupVisitSubmission(submission, () => mounted.current && !abandoning.current && visible.current && AppState.currentState === "active");
+            const sent = await sendGroupVisitSubmission(submission, () => mounted.current && !abandoning.current && visible.current && lifecycleEpoch.current === epoch && AppState.currentState === "active");
             if (!mounted.current || abandoning.current) return;
             if (!sent) { setError("Save paused before sending. Retry this same submission when this screen is active."); return; }
+            savedRestaurantId.current = sent;
             completedRef.current = true; setCompleted(true); uncertain.current = false;
             pendingLeave.current = null; setConfirmLeaving(false);
         } catch (error) {
@@ -245,18 +255,34 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             submitting.current = false;
             if (mounted.current) setSaving(false);
         }
-        if (!mounted.current || abandoning.current || !visible.current || AppState.currentState !== "active") return;
-        finishSubmission();
+        if (!mounted.current || abandoning.current || lifecycleEpoch.current !== epoch || !visible.current || AppState.currentState !== "active") return;
+        await finishSubmission();
     }
 
-    function finishSubmission() {
+    async function finishSubmission() {
         const destination = lastSubmission.current?.args.target_group_ids;
-        if (!completedRef.current || !destination || !mounted.current || abandoning.current || !visible.current || AppState.currentState !== "active") return;
-        if (destination.length === 1) {
-            router.dismissTo({ pathname: "/group/[id]", params: { id: destination[0] } });
-        } else {
-            router.dismissTo("/groups");
+        if (!completedRef.current || !destination || !mounted.current || abandoning.current || resolvingDestination.current || !visible.current || AppState.currentState !== "active") return;
+        if (destination.length !== 1) {
+            router.dismissTo("/groups", { withAnchor: true });
+            return;
         }
+        resolvingDestination.current = true;
+        const epoch = lifecycleEpoch.current;
+        try {
+            // Save RPCs return the shared restaurant ID. Resolve the group entry
+            // with an authorized read; it is never interchangeable with entryId.
+            const token = await accountAccessToken(userId);
+            if (!mounted.current || abandoning.current) return;
+            const result = await supabase.rpc("get_group_restaurants", { target_group_id: destination[0] })
+                .setHeader("Authorization", `Bearer ${token}`);
+            if (result.error) throw result.error;
+            if (!mounted.current || abandoning.current || !currentAccount.current || lifecycleEpoch.current !== epoch || !visible.current || AppState.currentState !== "active") return;
+            const entry = result.data.find(item => item.restaurant_id === savedRestaurantId.current);
+            if (!entry) throw new Error("Saved entry is unavailable");
+            router.dismissTo({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: destination[0], entryId: entry.id } }, { withAnchor: true });
+        } catch {
+            if (mounted.current && !abandoning.current) setError("Visit saved. Could not open its history. Continue to Groups to check again; this will not save another visit.");
+        } finally { resolvingDestination.current = false; }
     }
 
     const existingRestaurant = restaurantId !== undefined;
@@ -268,13 +294,15 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             {confirmLeaving && <Modal visible transparent animationType="fade" onRequestClose={stayOnSave}>
                 <View style={formStyles.confirmationOverlay}>
                     <View accessibilityViewIsModal style={[styles.card, formStyles.confirmationCard]}>
-                        <Text style={styles.cardTitle}>Leave this save?</Text>
-                        <Text style={styles.message}>Stay to keep this submission and retry the exact same save. The visit may already have been saved. If you leave, reopening cannot safely retry it. Check your group&apos;s visits before adding another.</Text>
+                        <Text style={styles.cardTitle}>{saveWarning ? "Leave this save?" : "Discard unsaved changes?"}</Text>
+                        <Text style={styles.message}>{saveWarning
+                            ? "Stay to keep this submission and retry the exact same save. The visit may already have been saved. If you leave, reopening cannot safely retry it. Check your group's visits before adding another."
+                            : "Your changes will be cleared without saving."}</Text>
                         <Pressable accessibilityRole="button" onPress={stayOnSave} style={styles.primaryButton}>
-                            <Text style={styles.primaryText}>Stay and Keep Submission</Text>
+                            <Text style={styles.primaryText}>{saveWarning ? "Stay and Keep Submission" : "Stay"}</Text>
                         </Pressable>
                         <Pressable accessibilityRole="button" onPress={leaveAnyway} style={styles.secondaryButton}>
-                            <Text style={styles.secondaryText}>Leave Anyway</Text>
+                            <Text style={styles.secondaryText}>{saveWarning ? "Leave Anyway" : "Discard"}</Text>
                         </Pressable>
                     </View>
                 </View>
@@ -325,7 +353,7 @@ function VisitForm({ userId, groupId, restaurantId }: { userId: string; groupId?
             {!loading && loadError === "" && groups.length === 0 && (
                 <>
                     <Text style={styles.message}>Create or join a group from Groups before saving a visit.</Text>
-                    <Pressable accessibilityRole="button" disabled={saving} onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, saving && styles.disabled]}>
+                    <Pressable accessibilityRole="button" disabled={saving} onPress={() => requestLeave(() => router.dismissTo("/groups", { withAnchor: true }))} style={[styles.secondaryButton, saving && styles.disabled]}>
                         <Text style={styles.secondaryText}>Create / Join a Group</Text>
                     </Pressable>
                 </>

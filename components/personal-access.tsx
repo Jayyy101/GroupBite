@@ -1,22 +1,23 @@
+import { ScreenScaffold } from "@/components/screen-scaffold";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import type { ReactNode } from "react";
-import { Pressable, ScrollView, Text } from "react-native";
+import { Pressable, Text } from "react-native";
 
 export function PersonalAccess({ title, children }: { title: string; children: (userId: string) => ReactNode }) {
     const router = useRouter();
     const { session, loading, error } = useAuth();
     const focused = useIsFocused();
     const { isActive } = useForegroundRefresh();
-    // Unmount account data, drafts and confirmations on blur/background/sign-out.
-    // Returning mounts a fresh owner-scoped read; keyed children isolate accounts.
+    // Unmount private UI on blur/background/sign-out. Form controllers above this
+    // gate retain account-scoped drafts; edit controllers verify access on return.
     if (!focused || !isActive) return null;
     if (!loading && session) return children(session.user.id);
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+        <ScreenScaffold>
             <Pressable accessibilityRole="button" onPress={() => router.canGoBack() ? router.back() : router.replace("/")} style={[styles.secondaryButton, styles.backButton]}>
                 <Text style={styles.secondaryText}>Back</Text>
             </Pressable>
@@ -26,6 +27,6 @@ export function PersonalAccess({ title, children }: { title: string; children: (
             {!loading && <Pressable accessibilityRole="button" onPress={() => router.push("/auth")} style={styles.primaryButton}>
                 <Text style={styles.primaryText}>Sign In / Sign Up</Text>
             </Pressable>}
-        </ScrollView>
+        </ScreenScaffold>
     );
 }

@@ -21,7 +21,8 @@ function defer() { let resolve; const promise = new Promise(r => { resolve = r; 
 
 function runtime(options = {}) {
     const world = { auth: { loading: false, error: '', session: { user: { id: 'a' }, access_token: 'fake-a' } },
-        focused: true, params: {}, rows: [], requests: [], navigation: [], listeners: new Set(), override: null,
+        safeAreaInsets: options.safeAreaInsets ?? { top: 0, left: 0, right: 0, bottom: 0 },
+        focused: true, params: {}, rows: [], requests: [], navigation: [], listeners: new Set(), intervals: new Set(), override: null,
         local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localReads: 0, localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [], removalGuards: new Set() };
     let nextId = 2;
     async function fetchOffline(input, init) {
@@ -96,17 +97,19 @@ function runtime(options = {}) {
     const jsx = (type, props, key) => ({ type, props: props ?? {}, key });
     const router = options.router ?? { push: x => world.navigation.push(x), navigate: x => world.navigation.push(x), replace: x => world.navigation.push(x), dismissTo: x => world.navigation.push(x),
         canGoBack: () => world.canGoBack !== false, back: () => world.navigation.push('BACK') };
-    const navigation = { dispatch: action => options.navigationDispatch
+    const navigation = options.navigation ?? { dispatch: action => options.navigationDispatch
         ? options.navigationDispatch(action) : world.navigation.push(action) };
     const mocks = {
+        '@expo/vector-icons/Ionicons': { default: 'Icon' },
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
+        'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
             Linking: { async openURL(url) { world.links.push(url); } }, Platform: { OS: options.platform ?? 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
         'expo-router': { Redirect: 'Redirect', useRouter: () => router, useLocalSearchParams: () => world.params,
             useGlobalSearchParams: () => world.params, usePathname: () => world.pathname ?? '/',
+            Tabs: Object.assign(props => ({ type: 'Tabs', props: { ...props, children: [props.children, world.tabsScreen ? { type: world.tabsScreen, props: {} } : null] } }), { Screen: 'TabScreen' }),
             Stack: Object.assign(props => ({ type: 'Stack', props }), { Screen: 'StackScreen' }),
             useFocusEffect: cb => react.useEffect(() => world.focused ? cb() : undefined, [world.focused, cb]) },
-        '@react-navigation/native': { useIsFocused: () => world.focused, useNavigation: () => navigation,
+        '@react-navigation/native': { StackActions: { popToTop: () => ({ type: 'POP_TO_TOP' }) }, TabActions: { jumpTo: name => ({ type: 'JUMP_TO', payload: { name } }) }, useIsFocused: () => world.focused, useNavigation: () => navigation,
             usePreventRemove(enabled, callback) {
                 const guard = react.useRef(); guard.current = { enabled, callback };
                 react.useEffect(() => { world.removalGuards.add(guard); return () => world.removalGuards.delete(guard); }, []);
@@ -119,6 +122,9 @@ function runtime(options = {}) {
         expo: { requireOptionalNativeModule: () => null },
         'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' },
         ...options.mocks,
+        // Map fixtures add SafeAreaView; preserve the inset hook used by shared screens.
+        'react-native-safe-area-context': { useSafeAreaInsets: () => world.safeAreaInsets,
+            ...options.mocks?.['react-native-safe-area-context'] },
     };
     const cache = {};
     function load(name) {
@@ -127,20 +133,23 @@ function runtime(options = {}) {
         const base = path.join(root, name.replace(/^@\//, ''));
         const extensions = options.platform === 'ios' ? ['.ios.ts', '.ios.tsx', '.ts', '.tsx'] : ['.ts', '.tsx'];
         const route = name.startsWith('app/') ? name.slice(4) : null;
-        const file = [base, path.join(base, 'index'), ...(route ? [path.join(root, 'app/(app)/(tabs)', route), path.join(root, 'app/(app)', route)] : [])]
+        const file = [base, path.join(base, 'index'), ...(route ? [path.join(root, 'app/(app)/(tabs)', route), ...['(my-places)', '(groups)', '(account)'].map(group => path.join(root, 'app/(app)/(tabs)', group, route)), path.join(root, 'app/(app)', route)] : [])]
             .flatMap(base => extensions.map(ext => base + ext)).find(file => fs.existsSync(file));
         assert(file, 'Unexpected import ' + name);
         const code = ts.transpileModule(fs.readFileSync(file, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2022 } }).outputText;
         const module = { exports: {} }; cache[name] = module.exports;
         vm.runInNewContext(code, { exports: module.exports, module, require: name => name.startsWith('.') ? load('@/' + path.relative(root, path.resolve(path.dirname(file), name))) : load(name),
-            setInterval: () => 1, clearInterval: () => {},
+            setInterval: callback => { world.intervals.add(callback); return callback; }, clearInterval: callback => world.intervals.delete(callback),
             setTimeout: options.setTimeout ?? setTimeout, clearTimeout: options.clearTimeout ?? clearTimeout,
             fetch: options.autocompleteFetch ?? (() => assert.fail('Unexpected unmocked autocomplete Fetch')),
             process: { env: options.autocompleteEnv ?? {} },
             AbortController, URL, URLSearchParams, Headers, Request, Response, __DEV__: options.development ?? false, Date, console });
         return module.exports;
     }
-    function render(Screen) {
+    function render(Screen, accountBoundary = true) {
+        // Match the account-scoped production lifetime above disposable routes.
+        const Provider = load('@/providers/group-creation').GroupCreationProvider;
+        function Boundary() { return accountBoundary ? jsx(Provider, { children: jsx(Screen, {}) }, world.auth.session?.user.id) : jsx(Screen, {}); }
         const frames = new Map();
         const renderer = { dirty: true, output: null, effects: [],
             draw() {
@@ -166,9 +175,11 @@ function runtime(options = {}) {
                         const output = element.type(element.props); current = previous;
                         return visit(output, key);
                     }
-                    return { ...element, props: { ...element.props, children: visit(element.props.children, route + '/' + element.type) } };
+                    const children = element.type === 'Pressable' && typeof element.props.children === 'function'
+                        ? element.props.children({ pressed: world.pressed ?? false }) : element.props.children;
+                    return { ...element, props: { ...element.props, children: visit(children, route + '/' + element.type) } };
                 }
-                renderer.output = visit(jsx(Screen, {}), 'root');
+                renderer.output = visit(jsx(Boundary, {}), 'root');
                 for (const [key, frame] of frames) if (!frame.used) { frame.alive = false; frame.slots.forEach(slot => slot.cleanup?.()); frames.delete(key); }
                 renderer.effects.splice(0).forEach(fn => fn());
             },
@@ -183,6 +194,7 @@ function runtime(options = {}) {
             if (guard) { guard.current.callback({ data: { action } }); return true; }
             proceed(); return false;
         },
+        poll() { [...world.intervals].forEach(fn => fn()); },
         emit(state) { appState.currentState = state; [...world.listeners].forEach(fn => fn(state)); }, switch(user, renderer) {
         world.auth = { loading: false, error: '', session: user ? { user: { id: user }, access_token: 'fake-' + user } : null };
         if (renderer) renderer.dirty = true;
@@ -196,12 +208,13 @@ function nodes(element) {
     return [element, ...nodes(element.props.children)];
 }
 const textOf = x => nodes(x).filter(n => typeof n === 'string' || typeof n === 'number').join(' ');
-function button(r, label) { const b = nodes(r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === label); assert(b, 'Missing ' + label + ': ' + textOf(r.output)); return b; }
+function button(r, label) { const b = nodes(r.output).find(n => n.type === 'Pressable' && (n.props.accessibilityLabel === label || textOf(n.props.children) === label)); assert(b, 'Missing ' + label + ': ' + textOf(r.output)); return b; }
 async function click(r, label) { const b = button(r, label); assert(!b.props.disabled, label + ' disabled'); await b.props.onPress(); await r.settle(); }
 async function enter(r, label, value) { const input = nodes(r.output).find(n => n.type === 'TextInput' && n.props.accessibilityLabel === label); assert(input); assert(input.props.editable); input.props.onChangeText(value); await r.settle(); }
 async function fill(r) { await enter(r, 'Restaurant name', ' New Cafe '); await enter(r, 'Restaurant address', ' New Address '); await enter(r, 'Personal notes', ' New memory '); }
 async function test(label, fn) { await fn(); passed++; console.log('PASS ' + label); }
-function screen(rt, name) { return rt.render(rt.load('app/' + name).default); }
+// The actual app layout owns its provider and must itself survive auth changes.
+function screen(rt, name) { return rt.render(rt.load('app/' + name).default, name !== '(app)/_layout'); }
 
 module.exports = { runtime, fixture, response, screen, click, enter, fill, button, nodes, textOf };
 
@@ -394,7 +407,7 @@ if (require.main === module) (async () => {
         assert.equal(checks[0].url.searchParams.get('client_request_id'), 'eq.' + committed.client_request_id);
         assert(button(r, 'Save Personal Place').props.disabled); assert(textOf(r.output).includes('may still finish'));
         assert.equal(rt.world.navigation.length, 0);
-        await click(r, 'Review My Places');
+        await click(r, 'Review My Places'); await click(r, 'Discard');
         assert.equal(rt.world.rows.length, 0); assert.equal(rt.world.requests.filter(x => x.method === 'POST').length, 1);
         assert.equal(rt.world.requests.filter(x => x.method === 'DELETE').length, 1);
         assert.equal(rt.world.navigation.at(-1), '/my-places'); r.unmount();
@@ -413,7 +426,7 @@ if (require.main === module) (async () => {
     await test('Stale edit locks the form and never overwrites a newer revision', async () => {
         const rt = runtime(); rt.world.params = { id: placeId }; rt.world.rows = [fixture()]; const r = screen(rt, 'personal-place-form'); await r.settle();
         rt.world.rows[0].revision = 2; rt.world.rows[0].notes = 'Other device'; await enter(r, 'Personal notes', 'Stale draft'); await click(r, 'Save Changes');
-        assert(button(r, 'Save Changes').props.disabled); assert(textOf(r.output).includes('place changed')); assert.equal(rt.world.rows[0].notes, 'Other device'); assert.equal(rt.world.navigation.length, 0); await click(r, 'Cancel and Refresh Place'); r.unmount();
+        assert(button(r, 'Save Changes').props.disabled); assert(textOf(r.output).includes('place changed')); assert.equal(rt.world.rows[0].notes, 'Other device'); assert.equal(rt.world.navigation.length, 0); await click(r, 'Cancel and Refresh Place'); await click(r, 'Discard'); r.unmount();
     });
     await test('Stale delete reloads details and requires a fresh confirmation', async () => {
         const rt = runtime(); rt.world.params = { id: placeId }; rt.world.rows = [fixture()]; const r = screen(rt, 'personal-place/[id]'); await r.settle(); await click(r, 'Delete Personal Place');
@@ -426,7 +439,7 @@ if (require.main === module) (async () => {
             Object.assign(rt.world.rows[0], call.body, { revision: 2 }); return response({ code: '', message: 'lost response' }, 400);
         };
         const r = screen(rt, 'personal-place-form'); await r.settle(); await enter(r, 'Personal notes', 'Committed memory'); await click(r, 'Save Changes');
-        assert(button(r, 'Save Changes').props.disabled); assert.equal(rt.world.requests.filter(x => x.method === 'PATCH').length, 1); await click(r, 'Cancel and Refresh Place'); r.unmount();
+        assert(button(r, 'Save Changes').props.disabled); assert.equal(rt.world.requests.filter(x => x.method === 'PATCH').length, 1); await click(r, 'Cancel and Refresh Place'); await click(r, 'Discard'); r.unmount();
         const details = screen(rt, 'personal-place/[id]'); await details.settle(); assert(textOf(details.output).includes('Committed memory')); details.unmount();
     });
     await test('Lost delete result reloads missing state and never automatically retries', async () => {

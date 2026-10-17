@@ -148,7 +148,7 @@ async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name
                 rt.world.override = c => c.method === 'POST' ? response({ code: '', message: 'lost response' }, 400) : null;
                 await click(r, 'Save Personal Place');
             }
-            await click(r, exit); empty(r); assert.equal(rt.world.navigation.at(-1), exit === 'Back' ? 'BACK' : '/my-places');
+            await click(r, exit); assert.equal(rt.world.navigation.length, 0); await click(r, 'Stay'); await click(r, exit); await click(r, 'Discard'); empty(r); assert.equal(rt.world.navigation.at(-1), exit === 'Back' ? 'BACK' : '/my-places');
             assert.equal(rt.world.localWrites, 0); r.unmount(); const fresh = screen(rt, 'personal-place-form'); await fresh.settle(); empty(fresh); fresh.unmount();
         }
     });
@@ -158,12 +158,13 @@ async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name
         assert.equal(f.rt.world.navigation.length, 0); assert.equal(f.rt.world.lateUpdates, 0); assert.equal(f.rt.world.localWrites, 0);
         assert(!button(fresh, 'Save Personal Place').props.disabled); fresh.unmount();
     });
-    await test('Edit forms keep existing background cleanup and fresh owner/revision read behavior', async () => {
+    await test('Edit drafts survive hiding and a newer revision blocks saving instead of replacing the draft', async () => {
         const rt = runtime(); rt.world.params = { id: fixture().id }; rt.world.rows = [fixture()]; const r = screen(rt, 'personal-place-form'); await r.settle();
         await enter(r, 'Restaurant name', 'Unsaved edit'); await background(rt, r);
         rt.world.rows[0].name = 'Newer server name'; rt.world.rows[0].revision = 2; await foreground(rt, r);
-        assert.equal(input(r, 'Restaurant name').props.value, 'Newer server name'); await click(r, 'Save Changes');
-        assert.equal(rt.world.requests.find(c => c.method === 'PATCH').url.searchParams.get('revision'), 'eq.2'); r.unmount();
+        assert.equal(input(r, 'Restaurant name').props.value, 'Unsaved edit');
+        assert(button(r, 'Save Changes').props.disabled); assert(textOf(r.output).includes('draft is retained'));
+        assert.equal(rt.world.requests.filter(c => c.method === 'PATCH').length, 0); r.unmount();
     });
     console.log(passed + ' offline Personal Place create-draft regression checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

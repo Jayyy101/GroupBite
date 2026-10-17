@@ -64,7 +64,7 @@ let passed=0;async function test(label,fn){await fn();passed++;console.log('PASS
     // Actual installed stack reducer; the offline hook boundary models removal
     // prevention and native iOS's cancelled-dismiss -> POP request contract.
     function navigationFixture(direct=false) {
-        const reducer=StackRouter({}),options={routeNames:['groups','add-visit','group/[id]'],routeParamList:{},routeGetIdList:{}};
+        const reducer=StackRouter({}),options={routeNames:['groups','add-visit','group/[id]','group/[id]/restaurant/[entryId]'],routeParamList:{},routeGetIdList:{}};
         let state=reducer.getInitialState(options),f;
         const initial=direct?['add-visit']:['groups','add-visit'];
         state={...state,index:initial.length-1,routes:initial.map((name,i)=>({name,key:'fixture-'+i}))};
@@ -134,7 +134,7 @@ let passed=0;async function test(label,fn){await fn();passed++;console.log('PASS
             assert.equal(nodes(r.output).filter(n=>n.type==='Modal').length,1);h.request({type:'POP',payload:{count:1}});await r.settle();assert.equal(nodes(r.output).filter(n=>n.type==='Modal').length,1);
             await click(r,'Stay and Keep Submission');assert.equal(nodes(r.output).filter(n=>n.type==='Modal').length,0);assert.equal(posts(f).length,1);
             await click(r,'Retry Same Visit Save');assert.deepEqual(posts(f)[1].body,original.body);assert.equal(posts(f)[1].url.pathname,original.url.pathname);
-            assert.equal(f.visits.length,1);assert.equal(h.current().name,'group/[id]');r.unmount();
+            assert.equal(f.visits.length,1);assert.equal(h.current().name,'group/[id]/restaurant/[entryId]');r.unmount();
         }
     });
     await test('In-flight Back can stay without replay; explicit abandonment ignores late results and old callbacks',async()=>{
@@ -146,7 +146,7 @@ let passed=0;async function test(label,fn){await fn();passed++;console.log('PASS
             if(abandon){assert.equal(h.current().name,'groups');r.unmount();}
             else assert.equal(h.current().name,'add-visit');
             task.resolve(f.commit(posts(f)[0]));await pending;if(!abandon)await r.settle();await save();
-            assert.equal(posts(f).length,1);assert.equal(f.visits.length,1);assert.equal(h.current().name,abandon?'groups':'group/[id]');assert.equal(f.rt.world.lateUpdates,0);r.unmount();
+            assert.equal(posts(f).length,1);assert.equal(f.visits.length,1);assert.equal(h.current().name,abandon?'groups':'group/[id]/restaurant/[entryId]');assert.equal(f.rt.world.lateUpdates,0);r.unmount();
         }
         // A confirmed outcome while the warning is open makes the warning stale.
         for(const outcome of ['success','rollback']){
@@ -157,7 +157,7 @@ let passed=0;async function test(label,fn){await fn();passed++;console.log('PASS
             task.resolve(outcome==='success'?f.commit(posts(f)[0]):response({code:'40001',message:'Confirmed rollback'},500));await pending;await r.settle();
             assert.equal(nodes(r.output).filter(n=>n.type==='Modal').length,0);assert.equal(h.current().name,'add-visit');
             if(outcome==='success'){f.rt.emit('active');await r.settle();await click(r,'Continue to Groups');assert.equal(f.visits.length,1);}
-            else{await enter(r,'Visit notes','Correction after rollback');await click(r,'Back');assert.equal(h.current().name,'groups');}
+            else{await enter(r,'Visit notes','Correction after rollback');await click(r,'Back');await click(r,'Discard');assert.equal(h.current().name,'groups');}
             assert.equal(posts(f).length,1);r.unmount();
         }
     });
@@ -190,7 +190,7 @@ let passed=0;async function test(label,fn){await fn();passed++;console.log('PASS
             const f=setup(),r=f.render();await r.settle();await fill(r);await choose(f,r);let n=0;
             f.rt.world.override=c=>c.url.pathname.includes('/rpc/save_restaurant_visit')&&++n===1?response({code,message:'Database rollback'},500):null;
             await click(r,'Save Visit');assert.equal(f.visits.length,0);assert(textOf(r.output).includes('rolled back without saving'));const original=posts(f)[0];
-            assert([...f.rt.world.removalGuards].every(g=>!g.current.enabled));await enter(r,'Visit notes','Corrected intentional visit');await click(r,'Close Apple Maps picker');await choose(f,r);await click(r,'Save Visit');
+            assert([...f.rt.world.removalGuards].some(g=>g.current.enabled), 'Corrected dirty draft is guarded after rollback');await enter(r,'Visit notes','Corrected intentional visit');await click(r,'Close Apple Maps picker');await choose(f,r);await click(r,'Save Visit');
             assert.equal(f.visits.length,1);assert.notEqual(posts(f)[1].body.client_request_id,original.body.client_request_id);assert.equal(posts(f)[1].body.visit_notes,'Corrected intentional visit');r.unmount();
         }
     });

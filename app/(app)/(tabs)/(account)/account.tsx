@@ -1,10 +1,11 @@
+import { ScreenScaffold } from "@/components/screen-scaffold";
 import { authErrorMessage } from "@/lib/auth-errors";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { Pressable, ScrollView, Text } from "react-native";
+import { Pressable, Text } from "react-native";
 
 export default function AccountScreen() {
     const { session } = useAuth();
@@ -31,18 +32,18 @@ function Account({ email }: { email?: string }) {
             if (mounted.current) setBusy(false);
         }
     }
-    return <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+    return <ScreenScaffold>
         <Text style={styles.title}>Account</Text>
         <Text style={styles.label}>Signed in as</Text>
         <Text selectable style={styles.message}>{email || "Your GroupBite account"}</Text>
         {error !== "" && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-        <Pressable accessibilityRole="button" disabled={busy} style={[styles.primaryButton, busy && styles.disabled]} onPress={signOut}>
-            <Text style={styles.primaryText}>{busy ? "Signing out..." : "Sign Out"}</Text>
+        <Pressable accessibilityRole="button" disabled={busy} style={[styles.secondaryButton, busy && styles.disabled]} onPress={signOut}>
+            <Text style={styles.secondaryText}>{busy ? "Signing out..." : "Sign Out"}</Text>
         </Pressable>
         <Text style={styles.label}>Older records</Text>
         <Text style={styles.message}>Device-only records are separate from your account. Review the archive only if this device&apos;s older records are yours.</Text>
         <Pressable accessibilityRole="button" disabled={busy} style={styles.secondaryButton} onPress={() => router.push("/saved-places")}>
             <Text style={styles.secondaryText}>Review device-only archive</Text>
         </Pressable>
-    </ScrollView>;
+    </ScreenScaffold>;
 }

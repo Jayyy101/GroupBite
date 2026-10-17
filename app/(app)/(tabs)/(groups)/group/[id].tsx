@@ -1,3 +1,5 @@
+import Ionicons from "@expo/vector-icons/Ionicons";
+import { ScreenScaffold } from "@/components/screen-scaffold";
 import { GroupMembershipConfirmation, type MembershipAction } from "@/components/group-membership-confirmation";
 import { useGroupAccess } from "@/hooks/use-group-access";
 import { groupErrorMessage, isGroupAccessDenied } from "@/lib/group-errors";
@@ -22,15 +24,11 @@ export default function GroupDetailScreen() {
         return <GroupDetails key={`${session.user.id}:${id}`} groupId={id} userId={session.user.id} />;
     }
     return (
-        <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, styles.backButton]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
-            <Text style={styles.title}>Group</Text>
+        <ScreenScaffold edgeToEdge title="Group" onBack={() => router.dismissTo("/groups")}>
             <Text style={styles.message}>
                 {loading ? "Restoring your session..." : !session ? "Sign in to view your groups." : "This group could not be found."}
             </Text>
-        </ScrollView>
+        </ScreenScaffold>
     );
 }
 
@@ -283,11 +281,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
     const hasActiveInvite = inviteExpires !== undefined && (inviteExpires === null || new Date(inviteExpires).getTime() > Date.now());
 
     return (
-        <ScrollView ref={scroll} style={styles.screen} contentContainerStyle={styles.content}>
-            <Pressable accessibilityRole="button" disabled={busy} onPress={() => router.dismissTo("/groups")} style={[styles.secondaryButton, styles.backButton]}>
-                <Text style={styles.secondaryText}>Back</Text>
-            </Pressable>
-            <Text style={styles.title}>{group?.name ?? "Group"}</Text>
+        <ScreenScaffold edgeToEdge title={group?.name ?? "Group"} scrollRef={scroll} busy={busy} onBack={() => router.dismissTo("/groups")}>
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
@@ -306,11 +300,16 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
                     <Text style={styles.label}>Saved restaurants</Text>
                     {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Add your first visit above!</Text>}
                     {restaurants.map(restaurant => (
-                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: groupId, entryId: restaurant.id } })} style={styles.card}>
-                            <Text style={styles.cardTitle}>{restaurant.name}</Text>
-                            <Text style={styles.message}>{restaurant.address}</Text>
-                            {restaurant.cuisine && <Text style={styles.message}>{restaurant.cuisine}</Text>}
-                            <Text style={styles.message}>{visitSummary(restaurant)}</Text>
+                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: groupId, entryId: restaurant.id } }, { withAnchor: true })} style={styles.card}>
+                            <View style={styles.cardBody}>
+                                <View style={styles.cardHeading}>
+                                    <Text style={[styles.cardTitle, styles.cardHeadingText]}>{restaurant.name}</Text>
+                                    <Ionicons name="chevron-forward" size={18} color="#79665E" accessible={false} importantForAccessibility="no" />
+                                </View>
+                                <Text style={[styles.message, styles.cardMessage]}>{restaurant.address}</Text>
+                                {restaurant.cuisine && <Text style={[styles.message, styles.cardMessage]}>{restaurant.cuisine}</Text>}
+                                <Text style={[styles.message, styles.cardMessage]}>{visitSummary(restaurant)}</Text>
+                            </View>
                         </Pressable>
                     ))}
                     <Text style={styles.label}>Current members</Text>
@@ -381,6 +380,6 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
             <Pressable accessibilityRole="button" disabled={busy || loading} onPress={() => { setError(""); setMessage(""); refreshDetails(); }} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>Refresh Group</Text>
             </Pressable>
-        </ScrollView>
+        </ScreenScaffold>
     );
 }

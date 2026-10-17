@@ -100,9 +100,10 @@ export async function createPersonalPlace(userId: string, fields: PersonalPlaceF
     throw new PersonalPlaceError("uncertain", "Could not confirm this save. Check Saved Result or review My Places before starting a new save.");
 }
 
-export async function updatePersonalPlace(userId: string, place: PersonalPlace, fields: PersonalPlaceFields): Promise<PersonalPlace> {
+export async function updatePersonalPlace(userId: string, place: PersonalPlace, fields: PersonalPlaceFields, canSend: () => boolean = () => true): Promise<PersonalPlace> {
     const value = normalizePersonalPlace(fields);
     const token = await accountToken(userId);
+    if (!canSend()) throw new PersonalPlaceError("invalid", "Save paused before sending. Return to the form and review it before saving.");
     const result = await supabase.from("personal_places").update(value).eq("owner_user_id", userId)
         .eq("id", place.id).eq("revision", place.revision).select("*")
         .setHeader("Authorization", `Bearer ${token}`).retry(false).maybeSingle();
