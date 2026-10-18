@@ -421,6 +421,8 @@ function tabPress(r, h, name) {
             const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
             assert.equal(tabPress(r, h, 'index'), false); h.select('(groups)');
             await enter(r, 'New group name', 'Unsaved'); assert(tabPress(r, h, name)); await r.settle();
+            assert(textOf(r.output).includes('Discard unsaved changes?'));
+            assert(!textOf(r.output).includes('Review this save before leaving'));
             assert.equal(h.current().name, 'groups'); await click(r, 'Stay'); assert(textOf(r.output).includes('Groups'));
             await enter(r, 'Invite code', 'code'); assert(tabPress(r, h, name)); await r.settle(); await click(r, 'Discard');
             assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
@@ -432,6 +434,100 @@ function tabPress(r, h, name) {
             await click(r, 'Stay'); pending.resolve({ data: { session: null }, error: null }); await saving; await r.settle();
             assert.equal(h.current().name, 'groups'); assert.equal(rt.world.requests.filter(c => c.method === 'POST').length, 0); r.unmount();
         }
+    });
+    await test('Uncertain Group creation warns on tab switch/reselect and preserves its recovery lock after returning', async () => {
+        for (const target of ['index', '(groups)']) {
+            const h = history('/groups');
+            const rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
+                ? response({ message: 'Lost creation response' }, 503) : backend(call),
+                navigation: { getState: h.tabState, dispatch: h.dispatch } });
+            const Groups = rt.load('app/groups').default, { useGroupCreation } = rt.load('@/providers/group-creation');
+            let creation;
+            function GroupRoute() { creation = useGroupCreation(); return { type: Groups, props: {} }; }
+            rt.world.tabsScreen = GroupRoute;
+            const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
+            await enter(r, 'New group name', 'Unconfirmed dinner');
+            const staleCreate = button(r, 'Create Group').props.onPress;
+            await click(r, 'Create Group');
+            const attempt = creation.attempt;
+            assert.equal(attempt.status, 'uncertain');
+            assert(tabPress(r, h, target)); await r.settle();
+            assert(textOf(r.output).includes('Review this save before leaving'));
+            assert(textOf(r.output).includes('Leaving does not cancel the request or unlock another creation.'));
+            assert(!textOf(r.output).includes('Discard unsaved changes?'));
+            await click(r, 'Stay'); assert.equal(h.current().name, 'groups');
+            assert.equal(creation.attempt, attempt);
+            assert(tabPress(r, h, target)); await r.settle(); await click(r, 'Leave Anyway');
+            assert.equal(h.chain()[2].name, target);
+            assert.equal(creation.attempt, attempt);
+            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
+            // Switching tabs blurs Groups; reselecting its root does not.
+            if (target === 'index') {
+                rt.world.focused = false; r.dirty = true; await r.settle(); h.select('(groups)');
+                rt.world.focused = true; r.dirty = true; await r.settle();
+            }
+            assert(button(r, 'Create Group').props.disabled);
+            assert(textOf(r.output).includes('Unconfirmed dinner'));
+            assert(textOf(r.output).includes('is unconfirmed.'));
+            await staleCreate();
+            assert(tabPress(r, h, 'index')); await r.settle();
+            assert(textOf(r.output).includes('Review this save before leaving'), 'Empty fields must not bypass uncertain recovery');
+            await click(r, 'Stay');
+            assert.equal(creation.attempt, attempt);
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1);
+            r.unmount();
+        }
+    });
+    await test('Uncertain Group creation guards native removal and local exits without discarding provider recovery', async () => {
+        for (const exit of ['native', 'local']) {
+            const rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
+                ? response({ message: 'Lost creation response' }, 503) : backend(call) });
+            const Groups = rt.load('app/groups').default, { useGroupCreation } = rt.load('@/providers/group-creation');
+            let creation, showGroups = true;
+            function Route() { creation = useGroupCreation(); return showGroups ? { type: Groups, props: {} } : null; }
+            const r = rt.render(Route); await r.settle();
+            await enter(r, 'New group name', 'Unconfirmed dinner'); await click(r, 'Create Group');
+            const attempt = creation.attempt, action = { type: 'POP', payload: { count: 1 } };
+            async function leave() {
+                if (exit === 'native') { assert(rt.attemptRemoval(action)); await r.settle(); }
+                else await click(r, 'Add Restaurant / Visit');
+            }
+            await leave(); assert(textOf(r.output).includes('Review this save before leaving'));
+            assert(!textOf(r.output).includes('Discard unsaved changes?'));
+            assert.equal(rt.world.navigation.length, 0);
+            await click(r, 'Stay'); assert.equal(creation.attempt, attempt);
+            await leave(); await click(r, 'Leave Anyway');
+            assert.equal(rt.world.navigation.length, 1);
+            assert.equal(rt.world.navigation[0], exit === 'native' ? action : '/add');
+            assert.equal(creation.attempt, attempt);
+            // Remount only the route, retaining the account-scoped provider.
+            showGroups = false; r.dirty = true; await r.settle();
+            showGroups = true; r.dirty = true; await r.settle();
+            assert.equal(creation.attempt, attempt);
+            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
+            assert(button(r, 'Create Group').props.disabled);
+            await leave(); assert(textOf(r.output).includes('Review this save before leaving'));
+            await click(r, 'Stay'); await click(r, 'Review Groups After Creation');
+            assert(button(r, 'Start a Separate Group'));
+            assert.equal(creation.attempt, attempt);
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1);
+            r.unmount();
+        }
+    });
+    await test('Confirmed Group creation keeps ordinary browsing and detail navigation without an uncertainty warning', async () => {
+        const h = history('/groups'), rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
+            ? response({ id: groupId, name: 'Dinner', owner_user_id: 'a' }) : backend(call), router: h.router,
+            navigation: { getState: h.tabState, dispatch: h.dispatch } });
+        rt.world.tabsScreen = rt.load('app/groups').default;
+        const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
+        await enter(r, 'New group name', 'Dinner'); await click(r, 'Create Group');
+        assert.equal(h.current().name, 'groups'); assert(!button(r, 'Create Group').props.disabled);
+        assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
+        assert.equal(tabPress(r, h, 'index'), false); h.select('(groups)');
+        await click(r, 'Dinner Owner');
+        assert.equal(h.current().name, 'group/[id]'); assert.equal(h.current().params.id, groupId);
+        assert(!nodes(r.output).some(n => n.type === 'Modal'));
+        assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1); r.unmount();
     });
     await test('Inline Visit Discard never saves/deletes; uncertain results lock retries and reconcile read-only', async () => {
         for (const action of ['edit', 'delete']) {

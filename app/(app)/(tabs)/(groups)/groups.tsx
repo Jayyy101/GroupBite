@@ -58,6 +58,7 @@ function SignedInGroups({ userId }: { userId: string }) {
     const creation = useGroupCreation();
     const [confirmNewCreation, setConfirmNewCreation] = useState(false);
     const [reviewedCreation, setReviewedCreation] = useState(false);
+    const [creationExitVersion, setCreationExitVersion] = useState(0);
     const reviewRequested = useRef<typeof creation.attempt>(null);
     const currentCreation = useRef(creation.attempt); currentCreation.current = creation.attempt;
     const busy = creating || requesting || creation.attempt?.status === "pending";
@@ -67,8 +68,14 @@ function SignedInGroups({ userId }: { userId: string }) {
     const lifecycleEpoch = useRef(0);
     const visible = useRef(false);
     visible.current = isFocused && isActive;
-    const leave = useLeaveGuard({ userId, dirty: name !== "" || inviteCode !== "", busy,
-        onDiscard: () => { setName(""); setInviteCode(""); setError(""); setRequestMessage(""); } });
+    const leave = useLeaveGuard({ userId, resetKey: String(creationExitVersion), dirty: name !== "" || inviteCode !== "", busy,
+        uncertain: creation.attempt?.status === "uncertain",
+        uncertainExitMessage: "The group may already have been created, or may still finish. Leaving does not cancel the request or unlock another creation. Return to Groups to review it before starting a separate group.",
+        onDiscard: () => {
+            setName(""); setInviteCode(""); setError(""); setRequestMessage("");
+            // A root-tab reselect does not blur Groups; rearm its retained recovery guard.
+            if (creation.attempt?.status === "uncertain") setCreationExitVersion(value => value + 1);
+        } });
     useEffect(() => { setReviewedCreation(false); setConfirmNewCreation(false); }, [creation.attempt]);
     useEffect(() => {
         mounted.current = true;
