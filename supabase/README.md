@@ -1,3 +1,8 @@
+> Current hosted baseline: **migrations 1–17 applied and verified** on GroupBite.
+> See the [Milestone 18 completion review](../docs/milestone-18-completion.md).
+> Earlier milestone sections preserve their original deployment instructions and
+> evidence; they are not instructions to reapply deployed SQL.
+
 # Milestone 8 setup
 
 **Current status, owner report 2026-10-11:** `geoapify-suggest` and
@@ -339,3 +344,42 @@ compensate.
 ## Migration 14: group Apple Place IDs
 
 `migrations/20261013001400_group_apple_place_ids.sql` was deployed to hosted GroupBite; migrations 1–14 are synchronized and all 11 read-only post-deployment verification checks passed, as confirmed by the owner. It adds a validated optional ID to group entries, a separate atomic Apple-aware visit RPC, a current-member group/entry ID read RPC, and shared-address invalidation. It preserves old RPC signatures, fingerprints, receipts, Geoapify, RLS and direct client grants. Apple functionality remains development-only; SQL permissions apply in every build. Manual release-binary and after-commit response-loss simulator coverage remain pending. Hosted `rls_auto_enable()` / `ensure_rls` provenance verification and documentation remain a separate pending task. Do not reapply migrations 1–13. The [16D contract and acceptance guide](../docs/milestone-16d-group-apple-place-ids.md) records manual results, offline coverage, permissions, exact retries and the disposable SQL/concurrency runner; never run its synthetic fixtures against hosted data.
+
+## Milestone 18
+
+Migrations `20261017001500_personal_visit_history.sql` and
+`20261017001600_unified_add_destinations.sql` were deployed and verified on the
+confirmed GroupBite project; do not reapply them. They
+preserve existing rows, add personal history and atomic destination receipts,
+and cut personal writes over to authenticated owner-checking RPCs. The disposable SQL runner supports
+`--milestone18`; disposable local SQL/RLS, preservation and concurrency validation
+has passed with restored temporary tooling.
+Cleanup/fixture scripts in `dev/` remain unexecuted and require separate scoped
+approval. Read-only preflight, diagnostics and logical SQL Editor exports were
+used during the approved backup/deployment phases; historical psql helpers are
+operator templates.
+See [Milestone 18](../docs/milestone-18-unified-add.md) for exact scopes and separate
+validation results, hosted-migration, cleanup and population approval requirements.
+
+Migration `20261018001700_personal_mapkit_locations.sql` is **deployed and
+registered** on the confirmed project. Database/data and standalone REST
+verification passed; the compatible app can restart for simulator testing.
+Do not reapply it. See the [deployment report](../docs/milestone-18-migration-17-deployment.md). It preserves user-selected native coordinates
+independently of optional Apple IDs, using an owner-scoped store separate from
+verified Geoapify metadata, an atomic personal-save adapter and location-only
+repair API. The runner's `--mapkit-locations` mode verifies it on disposable
+populated data. See the [location correction](../docs/milestone-18-mapkit-persistence.md)
+for scope, repair restrictions and app/backend cutover order.
+The [migration 17 predeployment handoff](../docs/milestone-18-migration-17-predeployment.md)
+provides the new SELECT-only `dev/m18_pre17_logical_backup.sql` export, including
+all 16 application tables present before migration 17, personal history and destination receipts.
+The fresh 126-row backup and migration-17 local rehearsal are now verified; see
+the [verification report](../docs/milestone-18-migration-17-backup-verification.md).
+Hosted migration 17 and its REST verification have passed. See the
+[simulator restart steps](../docs/milestone-18-rest-verification.md). Any record
+future repair remains separately gated. The owner subsequently confirmed the
+separately approved In-N-Out location-only repair preserved its original visit,
+and Special Noodle's unified Add save produced a personal map pin automatically.
+Both pins were verified in the simulator. The historical pre-17 backup does not
+include those later writes or the two new location/proof tables; any future data
+operation requires a fresh verified backup with all 18 application tables.

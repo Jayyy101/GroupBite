@@ -12,22 +12,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
-export default function GroupRestaurantScreen() {
+export default function GroupRestaurantScreen({ fromAdd = false }: { fromAdd?: boolean }) {
     const router = useRouter();
     const { id, entryId } = useLocalSearchParams<{ id?: string | string[]; entryId?: string | string[] }>();
     const { session, loading } = useAuth();
     if (!loading && session && isUuid(id) && isUuid(entryId)) {
-        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} />;
+        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} fromAdd={fromAdd} />;
     }
     return (
-        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => router.dismissTo("/groups")}>
+        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => fromAdd ? (router.canGoBack() ? router.back() : router.replace("/add")) : router.dismissTo("/groups")}>
             <Text style={styles.message}>{loading ? "Restoring your session..." : !session ? "Sign in to view group visits." : "This restaurant could not be found."}</Text>
         </ScreenScaffold>
     );
 }
 
-function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entryId: string; userId: string }) {
+function RestaurantDetails({ groupId, entryId, userId, fromAdd }: { groupId: string; entryId: string; userId: string; fromAdd: boolean }) {
     const router = useRouter();
+    const back = () => fromAdd ? (router.canGoBack() ? router.back() : router.replace("/add")) : router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
     const [restaurant, setRestaurant] = useState<GroupRestaurantSummary | null>(null);
     const [visits, setVisits] = useState<GroupVisit[]>([]);
     const [detailsLoading, setDetailsLoading] = useState(true);
@@ -55,7 +56,7 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
         },
         onComplete: entryRemoved => {
             setManagement(null);
-            if (entryRemoved) router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
+            if (entryRemoved) back();
             else { setMessage(management.action === "edit" ? "Visit updated." : "Visit deleted."); refreshAccess(); }
         },
     } : null, {
@@ -114,8 +115,9 @@ function RestaurantDetails({ groupId, entryId, userId }: { groupId: string; entr
     }, [groupId, entryId, access, accessKey]);
 
     return (
-        <ScreenScaffold edgeToEdge title={visibleRestaurant?.name ?? "Restaurant"} keyboardShouldPersistTaps="handled" busy={busy} onBack={() => router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } })}>
+        <ScreenScaffold edgeToEdge title={visibleRestaurant?.name ?? "Restaurant"} keyboardShouldPersistTaps="handled" busy={busy} onBack={back}>
             {editor.confirmation}
+            {access && !accessLoading && <Text style={styles.contextLabel}>Group · {access.group.name}</Text>}
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {message !== "" && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}

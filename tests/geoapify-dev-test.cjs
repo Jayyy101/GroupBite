@@ -9,7 +9,7 @@ const token = 'offline.e30.signature';
 const address = '100 Offline Test Street, San Francisco, CA 94103, USA';
 const receipt = 'offline.' + 'a'.repeat(43);
 const optedIn = { EXPO_PUBLIC_GEOAPIFY_DEV_TEST: 'true', EXPO_PUBLIC_GEOAPIFY_DEV_USER_ID: taylor };
-const forms = ['personal-place-form', 'add-visit'];
+const forms = ['personal-place-form']; // M18 retains Geoapify only in personal restaurant-facts editing.
 let passed = 0;
 function clock() {
     let time = 0, sequence = 0; const timers = new Map();
@@ -34,6 +34,8 @@ function backend(call) {
     if (call.url.pathname === '/rest/v1/rpc/get_group_restaurants') return response([{ id: '55555555-5555-5555-5555-555555555555', restaurant_id: '44444444-4444-4444-4444-444444444444' }]);
     if (call.url.pathname === '/rest/v1/rpc/save_restaurant_visit') return response('44444444-4444-4444-4444-444444444444');
     if (call.url.pathname === '/rest/v1/personal_places' && call.method === 'POST') return response(fixture({ ...call.body, owner_user_id: taylor }), 201);
+    if (call.url.pathname === '/rest/v1/personal_places' && call.method === 'GET') return response(fixture());
+    if (call.url.pathname.endsWith('/update_personal_place')) return response([fixture()]);
     assert.fail('Unexpected backend path ' + call.url.pathname);
 }
 function result(rt) {
@@ -57,7 +59,7 @@ function setup(options = {}) {
         },
     });
     rt.world.auth.session = { user: { id: taylor }, access_token: token };
-    rt.world.params = { groupId: group };
+    rt.world.params = { id: fixture().id };
     return { rt, time, calls, get props() { return props; } };
 }
 function rows(r) { return nodes(r.output).filter(n => n.props?.accessibilityLabel?.startsWith('Use address:')); }
@@ -130,10 +132,10 @@ async function test(label, fn) { await fn(); passed++; console.log('PASS ' + lab
         });
         await test(`${name}: the opt-in selection preserves original saves without coordinates, receipts or attachment calls`, async () => {
             const f = setup(), r = screen(f.rt, name); await r.settle(); await enter(r, 'Restaurant name', 'Test Cafe'); await search(f, r);
-            rows(r)[0].props.onPress(); await r.settle(); await click(r, name === 'add-visit' ? 'Save Visit' : 'Save Personal Place');
+            rows(r)[0].props.onPress(); await r.settle(); await click(r, name === 'add-visit' ? 'Save Visit' : 'Save Changes');
             const posts = f.rt.world.requests.filter(c => c.method === 'POST' && !c.url.pathname.endsWith('/get_group_restaurants'));  assert.equal(posts.length, 1);
             const keys = name === 'add-visit' ? ['client_request_id', 'restaurant_address', 'restaurant_cuisine', 'restaurant_name', 'target_group_ids', 'visit_date', 'visit_notes', 'visit_rating', 'visit_would_go_again']
-                : ['address', 'client_request_id', 'cuisine', 'name', 'notes', 'rating', 'visited_on', 'would_go_again'];
+                : ['target_personal_place_id','expected_revision','restaurant_name','restaurant_address','restaurant_cuisine'];
             assert.deepEqual(Object.keys(posts[0].body).sort(), keys.sort()); assert.equal(posts[0].body.address ?? posts[0].body.restaurant_address, address);
             assert.equal(f.rt.world.localWrites, 0); assert.equal(f.calls.length, 1); assert(!JSON.stringify(posts[0].body).includes(receipt));
             assert(!f.rt.world.requests.some(c => /attach|location|quota/.test(c.url.pathname))); r.unmount();
@@ -141,7 +143,7 @@ async function test(label, fn) { await fn(); passed++; console.log('PASS ' + lab
     }
     await test('Three attempts are shared across both forms, remounts, background, account changes and refreshed tokens', async () => {
         const f = setup();
-        for (const [i, name] of ['personal-place-form', 'add-visit', 'personal-place-form'].entries()) {
+        for (const [i, name] of ['personal-place-form', 'personal-place-form', 'personal-place-form'].entries()) {
             const r = screen(f.rt, name); await r.settle(); await search(f, r, 'Offline ' + i); assert.equal(f.calls.length, i + 1);
             f.rt.emit('background'); await r.settle(); f.rt.emit('active'); await r.settle();
             f.rt.world.auth.session = { user: { id: taylor }, access_token: 'new.e30.signature' }; r.dirty = true; await r.settle(); r.unmount();
@@ -149,7 +151,7 @@ async function test(label, fn) { await fn(); passed++; console.log('PASS ' + lab
         f.rt.world.auth.session = { user: { id: other }, access_token: token };
         const wrong = screen(f.rt, 'personal-place-form'); await wrong.settle(); assert.equal(f.props.mode, 'mock'); wrong.unmount();
         f.rt.world.auth.session = { user: { id: taylor }, access_token: token };
-        const r = screen(f.rt, 'add-visit'); await r.settle(); await search(f, r, 'Fourth query');
+        const r = screen(f.rt, 'personal-place-form'); await r.settle(); await search(f, r, 'Fourth query');
         assert.equal(f.calls.length, 3); assert(textOf(r.output).includes('Development test limit reached')); assert.equal(input(r).props.editable, true);
         await f.time.advance(20000, r); assert.equal(f.calls.length, 3); r.unmount();
     });

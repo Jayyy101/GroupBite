@@ -10,7 +10,7 @@ const restaurantId = '44444444-4444-4444-4444-444444444444';
 const tokenA = 'offline.e30.signatureA', tokenB = 'offline.e30.signatureB';
 const address = '100 Offline Test Street, San Francisco, CA 94103, USA';
 const receipt = 'offline.' + 'a'.repeat(43);
-const forms = ['personal-place-form', 'add-visit'];
+const forms = ['personal-place-form']; // M18 retains Geoapify only in personal restaurant-facts editing.
 let passed = 0;
 
 function clock() {
@@ -43,6 +43,8 @@ function backend(call) {
     if (call.url.pathname === '/rest/v1/restaurants') return response({ id: restaurantId, name: 'Existing Cafe', address: 'Existing Address', cuisine: null });
     if (call.url.pathname === '/rest/v1/rpc/save_restaurant_visit') return response(restaurantId);
     if (call.url.pathname === '/rest/v1/personal_places' && call.method === 'POST') return response(fixture({ ...call.body, owner_user_id: userA }), 201);
+    if (call.url.pathname === '/rest/v1/personal_places' && call.method === 'GET') return response(fixture());
+    if (call.url.pathname.endsWith('/update_personal_place')) return response([fixture()]);
     assert.fail('Unexpected backend path: ' + call.url.pathname);
 }
 function setup(name, options = {}) {
@@ -63,7 +65,7 @@ function setup(name, options = {}) {
         },
     });
     rt.world.auth.session = { user: { id: userA }, access_token: tokenA };
-    rt.world.params = { groupId };
+    rt.world.params = { id: fixture().id };
     if (options.enabled) rt.load('@/lib/address-search').GEOAPIFY_AUTOCOMPLETE_ENABLED = true; // Isolated VM future-build simulation only.
     const r = screen(rt, name);
     return { rt, r, time, calls, get props() { return addressProps; } };
@@ -91,7 +93,7 @@ async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name
             const f = setup(name, { development: false }); await f.r.settle();
             await enter(f.r, 'Restaurant name', 'Manual Cafe'); await query(f, 'Manual Address');
             assert(!textOf(f.r.output).includes('mock')); assert.equal(f.props.selection, null); assert.equal(f.calls.length, 0);
-            await click(f.r, name === 'add-visit' ? 'Save Visit' : 'Save Personal Place');
+            await click(f.r, name === 'add-visit' ? 'Save Visit' : 'Save Changes');
             const save = f.rt.world.requests.find(c => c.method === 'POST'); assert(save);
             assert.equal(save.body.address ?? save.body.restaurant_address, 'Manual Address');
             assert.equal(f.rt.world.localWrites, 0); f.r.unmount();
@@ -201,14 +203,14 @@ async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name
         await test(`${name}: real selections retain their receipt only in disposable UI and preserve exact save payloads`, async () => {
             const saveTask = deferred(), f = setup(name, { enabled: true, backend: call => call.method === 'POST' ? saveTask.promise : backend(call) });
             await f.r.settle(); await enter(f.r, 'Restaurant name', 'Real Selected Cafe'); await query(f); await choose(f);
-            const saveButton = nodes(f.r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === (name === 'add-visit' ? 'Save Visit' : 'Save Personal Place'));
+            const saveButton = nodes(f.r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === (name === 'add-visit' ? 'Save Visit' : 'Save Changes'));
             const pending = saveButton.props.onPress(); await f.r.settle();
             assert.equal(input(f.r).props.editable, false); assert(textOf(f.r.output).includes('Powered by Geoapify'));
             const posts = f.rt.world.requests.filter(c => c.method === 'POST'); assert.equal(posts.length, 1);
             const save = posts[0];
             const keys = name === 'add-visit'
                 ? ['client_request_id', 'restaurant_address', 'restaurant_cuisine', 'restaurant_name', 'target_group_ids', 'visit_date', 'visit_notes', 'visit_rating', 'visit_would_go_again']
-                : ['address', 'client_request_id', 'cuisine', 'name', 'notes', 'rating', 'visited_on', 'would_go_again'];
+                : ['target_personal_place_id','expected_revision','restaurant_name','restaurant_address','restaurant_cuisine'];
             assert.deepEqual(Object.keys(save.body).sort(), keys.sort()); assert.equal(save.body.address ?? save.body.restaurant_address, address);
             assert(!JSON.stringify(save.body).includes(receipt)); assert.equal(f.rt.world.localWrites, 0);
             assert.equal(f.calls.length, 1); assert(!f.rt.world.requests.some(c => /attach|location|quota/.test(c.url.pathname)));
@@ -220,25 +222,18 @@ async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name
     await test('Personal edit loads silently, uses the native adapter only on edits and preserves revision-based saving', async () => {
         const place = fixture({ owner_user_id: userA });
         const f = setup('personal-place-form', { enabled: true, backend: call => {
-            assert.equal(call.url.pathname, '/rest/v1/personal_places');
             if (call.method === 'GET') return response(place);
-            assert.equal(call.method, 'PATCH'); return response({ ...place, ...call.body, revision: 2 });
+            assert(call.url.pathname.endsWith('/update_personal_place'));return response([{ ...place, revision: 2 }]);
         } });
         f.rt.world.params = { id: place.id }; await f.r.settle(); await f.time.advance(2000, f.r);
         assert.equal(input(f.r).props.value, place.address); assert.equal(f.calls.length, 0);
         assert.equal(f.props.mode, 'geoapify'); await query(f); await choose(f); await click(f.r, 'Save Changes');
-        const save = f.rt.world.requests.find(c => c.method === 'PATCH'); assert(save);
-        assert.equal(save.url.searchParams.get('owner_user_id'), 'eq.' + userA);
-        assert.equal(save.url.searchParams.get('revision'), 'eq.1'); assert.equal(save.body.address, address);
-        assert.equal(save.body.notes, place.notes);
-        assert.deepEqual(Object.keys(save.body).sort(), ['address', 'cuisine', 'name', 'notes', 'rating', 'visited_on', 'would_go_again']);
+        const save = f.rt.world.requests.find(c => c.url.pathname.endsWith('/update_personal_place')); assert(save);
+        assert.equal(save.body.target_personal_place_id, place.id);
+        assert.equal(save.body.expected_revision, 1); assert.equal(save.body.restaurant_address, address);
+        assert(!('visit_notes' in save.body));
+        assert.deepEqual(Object.keys(save.body).sort(), ['expected_revision','restaurant_address','restaurant_cuisine','restaurant_name','target_personal_place_id']);
         assert.equal(f.calls.length, 1); assert.equal(f.rt.world.localWrites, 0); f.r.unmount();
-    });
-    await test('Existing shared Restaurant addresses remain locked with no live autocomplete request even in a future enabled build', async () => {
-        const f = setup('add-visit', { enabled: true }); f.rt.world.params.restaurantId = restaurantId;
-        await f.r.settle(); await f.time.advance(2000, f.r);
-        assert.equal(input(f.r).props.value, 'Existing Address'); assert.equal(input(f.r).props.editable, false);
-        assert.equal(f.props, undefined); assert.equal(f.calls.length, 0); f.r.unmount();
     });
     console.log(`${passed} offline Geoapify native form wiring checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

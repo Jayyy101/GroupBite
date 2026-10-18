@@ -87,6 +87,28 @@ export type PersonalPlace = PersonalPlaceFields & {
     revision: number;
 };
 
+export type PersonalVisit = Pick<PersonalPlaceFields, "visited_on" | "rating" | "would_go_again" | "notes"> & {
+    id: string; personal_place_id: string; owner_user_id: string; origin: "legacy" | "visit";
+    created_at: string; updated_at: string; revision: number;
+};
+export type PersonalPlaceSummary = PersonalPlace & Pick<GroupRestaurantSummary, "average_rating" | "rated_visit_count" | "total_visit_count">;
+export type AddRestaurant = {
+    name: string; address: string; cuisine: string | null; apple_place_id?: string | null;
+    destination_kind?: "personal" | "group"; group_id?: string | null; entry_id?: string;
+    // Transient native selection tied to display facts, never a route/journal value.
+    mapkit_point?: Readonly<{ name: string; address: string; latitude: number; longitude: number }>;
+};
+export type AddVisitArgs = {
+    client_request_id: string; restaurant_name: string; restaurant_address: string;
+    restaurant_cuisine: string | null; restaurant_apple_place_id: string | null;
+    target_entry_id: string | null; visit_date: string | null; visit_rating: number | null;
+    visit_would_go_again: boolean | null; visit_notes: string | null;
+};
+export type AddDestinationResult = {
+    destination_kind: "personal" | "group"; group_id: string | null;
+    entry_id: string | null; visit_id: string | null; available: boolean;
+};
+
 export type GroupRestaurant = {
     apple_place_id?: string | null;
     id: string;
@@ -174,10 +196,11 @@ export type SavedLocation = {
 export type Database = {
     public: {
         Tables: {
+            personal_visits: { Row: PersonalVisit; Insert: never; Update: never; Relationships: [] };
             personal_places: {
                 Row: PersonalPlace;
-                Insert: PersonalPlaceFields & { client_request_id: string; apple_place_id?: string | null };
-                Update: Partial<PersonalPlaceFields>;
+                Insert: never;
+                Update: never;
                 Relationships: [];
             };
             profiles: {
@@ -237,6 +260,21 @@ export type Database = {
         };
         Views: { [_ in never]: never };
         Functions: {
+            save_personal_visit_with_mapkit_point: { Args: AddVisitArgs & { selected_latitude: number; selected_longitude: number }; Returns: string };
+            set_personal_mapkit_location: { Args: { target_personal_place_id: string; expected_revision: number; expected_address: string;
+                selected_latitude: number; selected_longitude: number }; Returns: boolean };
+            get_personal_mapkit_locations: { Args: { page_size?: number; page_offset?: number };
+                Returns: { id: string; owner_user_id: string; name: string; address: string; latitude: number; longitude: number }[] };
+            save_personal_visit: { Args: AddVisitArgs; Returns: string };
+            save_group_visit_destination: { Args: AddVisitArgs & { target_group_id: string; expected_membership_id: string }; Returns: string };
+            get_add_destination_result: { Args: { client_request_id: string }; Returns: AddDestinationResult[] };
+            get_recent_add_restaurants: { Args: { page_size?: number; page_offset?: number }; Returns: (AddRestaurant & { destination_kind: "personal" | "group"; group_id: string | null; entry_id: string })[] };
+            update_personal_place: { Args: { target_personal_place_id: string; expected_revision: number;
+                restaurant_name: string; restaurant_address: string; restaurant_cuisine: string | null }; Returns: PersonalPlace[] };
+            delete_personal_place: { Args: { target_personal_place_id: string; expected_revision: number }; Returns: boolean };
+            manage_personal_visit: { Args: { target_personal_place_id: string; target_visit_id: string; expected_revision: number;
+                remove_visit: boolean; visit_date: string | null; visit_rating: number | null;
+                visit_would_go_again: boolean | null; visit_notes: string | null }; Returns: PersonalVisit[] };
             get_saved_locations: { Args: {
                 scope?: "all" | "personal" | "group";
                 target_group_id?: string | null;

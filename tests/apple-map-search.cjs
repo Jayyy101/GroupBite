@@ -49,6 +49,9 @@ function setup(options = {}) {
             'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' },
             'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' } },
         fetch(call) {
+            if(call.url.pathname==='/rest/v1/rpc/get_personal_mapkit_locations'){
+                assert.equal(call.method,'POST');assert.deepEqual(Object.keys(call.body).sort(),['page_offset','page_size']);return response([]);
+            }
             assert.equal(call.url.pathname, '/rest/v1/rpc/get_saved_locations'); assert.equal(call.method, 'POST');
             assert.equal(call.body.scope, 'personal'); assert.equal(call.body.target_group_id, null);
             return response(call.user === 'a' && options.saved !== false ? [saved()] : []);
@@ -106,7 +109,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
         await enter(r, 'Apple Maps search', 'Chipotle'); await f.time.advance(399, r); assert.equal(f.calls.length, 0);
         await f.time.advance(1, r); assert.equal(f.calls.length, 1); assert.equal(suggestions(r).length, 1);
         await click(r, 'Addresses'); assert.equal(suggestions(r).length, 0); await f.time.advance(400, r);
-        assert.equal(f.calls.at(-1).mode, 'address'); assert.equal(f.rt.world.requests.length, 1); r.unmount();
+        assert.equal(f.calls.at(-1).mode, 'address'); assert.equal(f.rt.world.requests.length, 2); r.unmount();
     });
     await test('Suggestions resolve only on selection; multiple locations require a separate explicit preview choice', async () => {
         const f = setup({ resolve: (_, requestId) => Promise.resolve([location(requestId + ':0'), location(requestId + ':1', { name: 'Another location' })]) });
@@ -124,7 +127,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
         assert.equal(red.props.draggable, false); assert.equal(blue.props.draggable, false);
         assert(textOf(r.output).includes('approximately')); await click(r, 'Looks correct (preview only)');
         assert(textOf(r.output).includes('Nothing was saved')); assert.equal(f.rt.world.localWrites, 0);
-        assert.equal(f.rt.world.requests.length, 1); assert.equal(f.api.pinDistanceMeters(saved(), saved()), 0);
+        assert.equal(f.rt.world.requests.length, 2); assert.equal(f.api.pinDistanceMeters(saved(), saved()), 0);
         const map = nodes(r.output).find(n => n.type === 'MapView'); assert(map.props.scrollEnabled && map.props.zoomEnabled);
         assert.equal(map.props.showsUserLocation, false); assert.equal(map.props.showsMyLocationButton, false);
         assert.equal(map.props.style.flex, 1); assert(map.props.style.minHeight >= 240); assert(!('height' in map.props.style));
@@ -310,7 +313,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
         assert(textOf(r.output).includes('Apple Place ID: Current-ID')); assert(textOf(r.output).includes('returned current Apple details'));
         assert.equal(markers(r).find(n => n.props.pinColor === 'blue').props.coordinate.latitude, 37.554);
         assert.equal(markers(r).find(n => n.props.pinColor === 'red').props.coordinate.latitude, saved().latitude);
-        assert.equal(f.rt.world.localWrites, 0); assert.equal(f.rt.world.requests.length, 1);
+        assert.equal(f.rt.world.localWrites, 0); assert.equal(f.rt.world.requests.length, 2);
         await click(r, 'Return to search'); assert.equal(candidates(r).length, 1); await f.time.advance(20000, r);
         assert.equal(f.calls.length, 2); r.unmount();
         const noId = setup(), other = noId.render(); await other.settle(); await preview(noId, other);
@@ -327,7 +330,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
             assert(!textOf(r.output).includes('private raw lookup')); assert(textOf(r.output).includes('Apple Place ID: Original-ID'));
             assert.equal(markers(r).find(n => n.props.pinColor === 'blue').props.coordinate.latitude, location().latitude);
             await f.time.advance(20000, r); assert.equal(f.calls.filter(c => c.action === 'lookup').length, 1);
-            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+            assert.equal(f.rt.world.requests.length, 2); assert.equal(f.rt.world.localWrites, 0); r.unmount();
         }
     });
     await test('Pending lookup double taps, return-to-search and privacy lifecycle discard obsolete responses', async () => {
@@ -368,7 +371,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
             const lookup = nodes(r.output).find(n => n.type === 'Pressable' && textOf(n.props.children) === 'Look up Apple Place ID again');
             assert.equal(lookup.props.disabled, !placeId);
             assert.equal(f.calls.filter(c => c.action === 'lookup').length, 0);
-            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+            assert.equal(f.rt.world.requests.length, 2); assert.equal(f.rt.world.localWrites, 0); r.unmount();
         }
     });
     await test('Fresh preview runtimes resolve the manually re-entered address without stored results or IDs', async () => {
@@ -400,7 +403,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
             if (code !== null) assert(!textOf(r.output).includes('No matching Apple locations'));
             await f.time.advance(20000, r); assert.equal(f.calls.filter(c => c.action === 'search').length, 1);
             assert.equal(candidates(r).length, 0); assert.equal(markers(r).length, 0);
-            assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0); r.unmount();
+            assert.equal(f.rt.world.requests.length, 2); assert.equal(f.rt.world.localWrites, 0); r.unmount();
         }
     });
     console.log(`${passed} offline native Apple search checks passed.`);

@@ -5,9 +5,6 @@ const { runtime, fixture, response, screen, click, enter, nodes, textOf } = requ
 
 const sampleAddress = '100 Demo Market Street, San Francisco, CA 94103, USA';
 const sample = { id: 'result', source: 'development-mock', address: sampleAddress, latitude: 37.7749, longitude: -122.4194 };
-const groupA = '22222222-2222-2222-2222-222222222222';
-const groupB = '33333333-3333-3333-3333-333333333333';
-const restaurantId = '44444444-4444-4444-4444-444444444444';
 let passed = 0;
 
 function virtualClock() {
@@ -39,12 +36,6 @@ async function choose(r, index = 0) {
     const suggestion = suggestions(r)[index]; assert(suggestion, 'Missing mock suggestion');
     suggestion.props.onPress(); await r.settle();
 }
-async function toggleGroup(r, name) {
-    const row = nodes(r.output).find(n => n.type === 'Pressable' && n.props.accessibilityRole === 'checkbox'
-        && textOf(n.props.children).trim().replace(/^✓\s*/, '') === name);
-    assert(row && !row.props.disabled, 'Missing enabled group ' + name);
-    row.props.onPress(); await r.settle();
-}
 async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name); }
 function setup(options = {}) {
     const clock = virtualClock();
@@ -70,14 +61,6 @@ function formRuntime(options = {}) {
     const rt = runtime({ development: true, setTimeout: clock.setTimeout, clearTimeout: clock.clearTimeout,
         observeComponent: (type, props) => { if (type.name === 'AddressAutocomplete') addressProps = props; }, ...options });
     return { rt, clock, get addressProps() { return addressProps; } };
-}
-function groupFetch(call) {
-    if (call.url.pathname === '/rest/v1/groups') return response([
-        { id: groupA, name: 'Dinner', owner_user_id: 'a' }, { id: groupB, name: 'Lunch', owner_user_id: 'a' },
-    ]);
-    if (call.url.pathname === '/rest/v1/restaurants') return response({ id: restaurantId, name: 'Existing Cafe', address: 'Existing Address', cuisine: 'Italian' });
-    if (call.url.pathname === '/rest/v1/rpc/save_restaurant_visit') return response(restaurantId);
-    assert.fail('Unexpected backend request: ' + call.url.pathname);
 }
 async function selectMock(r, clock) { await enter(r, 'Restaurant address', 'Demo'); await clock.advance(400, r); await choose(r); }
 
@@ -210,21 +193,9 @@ async function selectMock(r, clock) { await enter(r, 'Restaurant address', 'Demo
         assert.equal(input(r).props.maxLength, 300); assert.equal(input(r).props.autoCorrect, false);
         for (const row of suggestions(r)) { assert.equal(row.props.accessibilityRole, 'button'); assert(row.props.style.minHeight >= 48); }
         r.unmount();
-        const f = formRuntime(), form = screen(f.rt, 'personal-place-form'); await form.settle();
+        const f = formRuntime(); f.rt.world.params={id:fixture().id};f.rt.world.rows=[fixture()];const form = screen(f.rt, 'personal-place-form'); await form.settle();
         const scroll = nodes(form.output).find(n => n.type === 'ScrollView');
         assert.equal(scroll.props.keyboardShouldPersistTaps, 'handled'); assert.equal(scroll.props.automaticallyAdjustKeyboardInsets, true); form.unmount();
-    });
-    await test('Personal create stores selection only in form state and sends the original memory payload', async () => {
-        const f = formRuntime(), r = screen(f.rt, 'personal-place-form'); await r.settle();
-        await enter(r, 'Restaurant name', 'Mock UI Cafe'); await selectMock(r, f.clock);
-        assert.equal(f.addressProps.selection.latitude, sample.latitude);
-        await enter(r, 'Personal notes', 'Keep my notes'); await click(r, '4'); await click(r, 'No');
-        assert.equal(f.addressProps.selection.longitude, sample.longitude);
-        await click(r, 'Save Personal Place');
-        const body = f.rt.world.requests.find(c => c.method === 'POST').body;
-        assert.deepEqual(Object.keys(body).sort(), ['address','client_request_id','cuisine','name','notes','rating','visited_on','would_go_again']);
-        assert.equal(body.address, sampleAddress); assert.equal(body.rating, 4); assert.equal(body.notes, 'Keep my notes'); assert.equal(body.would_go_again, false);
-        assert.equal(f.rt.world.navigation.at(-1).pathname, '/personal-place/[id]'); assert.equal(f.rt.world.localWrites, 0); r.unmount();
     });
     await test('Personal edits load silently, clear edited selections and preserve revision-based saving', async () => {
         const f = formRuntime(); const place = fixture(); f.rt.world.rows = [place]; f.rt.world.params = { id: place.id };
@@ -232,90 +203,8 @@ async function selectMock(r, clock) { await enter(r, 'Restaurant address', 'Demo
         assert.equal(suggestions(r).length, 0); assert.equal(f.addressProps.selection, null);
         await selectMock(r, f.clock); await enter(r, 'Restaurant address', 'Manual replacement address'); assert.equal(f.addressProps.selection, null);
         await click(r, 'Save Changes');
-        const patch = f.rt.world.requests.find(c => c.method === 'PATCH'); assert.equal(patch.url.searchParams.get('revision'), 'eq.1');
-        assert.equal(patch.body.address, 'Manual replacement address'); assert.equal(patch.body.notes, place.notes); assert(!('latitude' in patch.body)); r.unmount();
-    });
-    await test('Add Visit retains multi-group choices, ratings, notes and the unchanged save RPC', async () => {
-        const f = formRuntime({ fetch: groupFetch }), r = screen(f.rt, 'add-visit'); await r.settle();
-        await enter(r, 'Restaurant name', 'Mock UI Cafe'); await selectMock(r, f.clock);
-        await toggleGroup(r, 'Dinner'); await toggleGroup(r, 'Lunch'); await click(r, '5'); await click(r, 'No'); await enter(r, 'Visit notes', 'Keep group notes');
-        assert.equal(f.addressProps.selection.latitude, sample.latitude);
-        await click(r, 'Save Visit');
-        const calls = f.rt.world.requests.filter(c => c.method === 'POST'); assert.equal(calls.length, 1);
-        assert.equal(calls[0].url.pathname, '/rest/v1/rpc/save_restaurant_visit');
-        assert.deepEqual(Object.keys(calls[0].body).sort(), ['client_request_id','restaurant_address','restaurant_cuisine','restaurant_name','target_group_ids','visit_date','visit_notes','visit_rating','visit_would_go_again']);
-        assert.deepEqual(calls[0].body.target_group_ids, [groupA,groupB]); assert.equal(calls[0].body.restaurant_address, sampleAddress);
-        assert.equal(calls[0].body.visit_rating, 5); assert.equal(calls[0].body.visit_notes, 'Keep group notes'); assert.equal(calls[0].body.visit_would_go_again, false);
-        assert.equal(f.rt.world.navigation.at(-1), '/groups'); assert.equal(f.rt.world.localWrites, 0); r.unmount();
-    });
-    await test('Existing shared Restaurant facts remain locked without any autocomplete or lookup', async () => {
-        const f = formRuntime({ fetch: groupFetch }); f.rt.world.params = { groupId: groupA, restaurantId };
-        const r = screen(f.rt, 'add-visit'); await r.settle(); await f.clock.advance(2000, r);
-        assert.equal(input(r).props.value, 'Existing Address'); assert.equal(input(r).props.editable, false);
-        assert.equal(f.addressProps, undefined); assert.equal(suggestions(r).length, 0); assert.equal(f.clock.size, 0);
-        assert(!textOf(r.output).includes('fictional mock')); await click(r, 'Save Visit');
-        assert.equal(f.rt.world.requests.find(c => c.method === 'POST').body.restaurant_address, 'Existing Address'); r.unmount();
-    });
-    await test('Account changes clear both forms, selections and pending searches', async () => {
-        for (const name of ['personal-place-form', 'add-visit']) {
-            const f = formRuntime(name === 'add-visit' ? { fetch: groupFetch } : {}), r = screen(f.rt, name); await r.settle();
-            await selectMock(r, f.clock); assert(f.addressProps.selection);
-            f.rt.switch('b', r); await r.settle(); assert.equal(input(r).props.value, ''); assert.equal(f.addressProps.selection, null);
-            await enter(r, 'Restaurant address', 'Demo'); assert.equal(f.clock.size, 1);
-            f.rt.switch('c', r); await r.settle(); await f.clock.advance(2000, r);
-            assert.equal(suggestions(r).length, 0); assert.equal(f.clock.size, 0); assert.equal(f.rt.world.lateUpdates, 0); r.unmount();
-        }
-    });
-    await test('Account switches and sign-out abort in-flight form searches without late updates', async () => {
-        for (const name of ['personal-place-form', 'add-visit']) for (const nextAccount of ['b', null]) {
-            const f = formRuntime(name === 'add-visit' ? { fetch: groupFetch } : {});
-            const task = deferred(); let signal;
-            f.rt.load('@/lib/mock-address-search').searchMockAddresses = (_, s) => { signal = s; return task.promise; };
-            const r = screen(f.rt, name); await r.settle();
-            await enter(r, 'Restaurant address', 'Demo'); await f.clock.advance(400, r);
-            f.rt.switch(nextAccount, r); await r.settle(); assert(signal.aborted);
-            task.resolve([sample]); await r.settle(); assert.equal(suggestions(r).length, 0); assert.equal(f.rt.world.lateUpdates, 0);
-            if (nextAccount) { assert.equal(input(r).props.value, ''); assert.equal(f.addressProps.selection, null); }
-            else assert(textOf(r.output).includes('Sign In / Sign Up'));
-            r.unmount();
-        }
-    });
-    await test('Blur and background clear selection; create and Visit text survive without automatic lookup', async () => {
-        for (const name of ['personal-place-form', 'add-visit']) for (const mode of ['blur', 'background']) {
-            const f = formRuntime(name === 'add-visit' ? { fetch: groupFetch } : {}), r = screen(f.rt, name); await r.settle();
-            await selectMock(r, f.clock);
-            if (mode === 'blur') { f.rt.world.focused = false; r.dirty = true; } else f.rt.emit('background');
-            await r.settle(); assert.equal(suggestions(r).length, 0); assert.equal(f.clock.size, 0);
-            if (mode === 'blur') { f.rt.world.focused = true; r.dirty = true; } else f.rt.emit('active');
-            await r.settle(); await f.clock.advance(2000, r);
-            assert.equal(f.addressProps.selection, null); assert.equal(suggestions(r).length, 0);
-            assert.equal(input(r).props.value, sampleAddress); r.unmount();
-        }
-    });
-    await test('Personal create background cancels debounce while retaining manual text without restarting search', async () => {
-        const f = formRuntime(), r = screen(f.rt, 'personal-place-form'); await r.settle();
-        await enter(r, 'Restaurant name', 'Draft Cafe'); await enter(r, 'Restaurant address', 'Demo'); assert.equal(f.clock.size, 1);
-        f.rt.emit('inactive'); await r.settle(); assert.equal(r.output, null); assert.equal(f.clock.size, 0);
-        f.rt.emit('background'); await r.settle(); f.rt.emit('active'); await r.settle(); await f.clock.advance(5000, r);
-        assert.equal(input(r).props.value, 'Demo'); assert.equal(f.addressProps.selection, null); assert.equal(suggestions(r).length, 0);
-        assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'Restaurant name').props.value, 'Draft Cafe');
-        assert.equal(f.rt.world.requests.length, 0); assert.equal(f.rt.world.lateUpdates, 0); r.unmount();
-    });
-    await test('Personal create background aborts in-flight autocomplete and ignores late results after remount', async () => {
-        const f = formRuntime(), task = deferred(); let signal, calls = 0;
-        f.rt.load('@/lib/mock-address-search').searchMockAddresses = (_, s) => { signal = s; calls++; return task.promise; };
-        const r = screen(f.rt, 'personal-place-form'); await r.settle(); await enter(r, 'Restaurant address', 'Demo'); await f.clock.advance(400, r);
-        f.rt.emit('background'); await r.settle(); assert(signal.aborted); f.rt.emit('active'); await r.settle();
-        task.resolve([sample]); await r.settle(); await f.clock.advance(5000, r);
-        assert.equal(input(r).props.value, 'Demo'); assert.equal(suggestions(r).length, 0); assert.equal(f.addressProps.selection, null);
-        assert.equal(calls, 1); assert.equal(f.rt.world.lateUpdates, 0); assert.equal(f.rt.world.requests.length, 0); r.unmount();
-    });
-    await test('Refresh Groups clears autocomplete state while preserving address, notes and chosen groups', async () => {
-        const f = formRuntime({ fetch: groupFetch }), r = screen(f.rt, 'add-visit'); await r.settle();
-        await selectMock(r, f.clock); await toggleGroup(r, 'Dinner'); await enter(r, 'Visit notes', 'Draft notes');
-        await click(r, 'Refresh Groups'); assert.equal(f.addressProps.selection, null); assert.equal(input(r).props.value, sampleAddress);
-        assert(textOf(r.output).includes('✓  Dinner')); assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'Visit notes').props.value, 'Draft notes');
-        await f.clock.advance(2000, r); assert.equal(suggestions(r).length, 0); r.unmount();
+        const patch = f.rt.world.requests.find(c => c.url.pathname.endsWith('/update_personal_place')); assert.equal(patch.body.expected_revision, 1);
+        assert.equal(patch.body.restaurant_address, 'Manual replacement address'); assert(!('visit_notes' in patch.body)); assert(!('latitude' in patch.body)); r.unmount();
     });
     await test('Real-mode props cannot enable network searches in the checked-in build', async () => {
         for (const development of [true, false]) {
@@ -391,27 +280,6 @@ async function selectMock(r, clock) { await enter(r, 'Restaurant address', 'Demo
         await enter(f.r, 'Restaurant address', 'Next'); await f.clock.advance(400, f.r);
         f.control.mode = 'mock'; f.r.dirty = true; await f.r.settle(); assert(tasks[2].signal.aborted);
         tasks[2].resolve([realSuggestion()]); await f.r.settle(); assert.equal(realRows(f.r).length, 0); f.r.unmount();
-    });
-    await test('Future real selections remain transient and never change personal or Visit save payloads', async () => {
-        for (const name of ['personal-place-form', 'add-visit']) {
-            const item = realSuggestion(); let selectedProps;
-            const f = formRuntime({ ...(name === 'add-visit' ? { fetch: groupFetch } : {}), observeComponent: (type, props) => {
-                if (type.name === 'AddressAutocomplete') {
-                    selectedProps = props; props.mode = 'geoapify'; props.search = stableSearch;
-                }
-            } });
-            const stableSearch = async () => [item];
-            f.rt.load('@/lib/address-search').GEOAPIFY_AUTOCOMPLETE_ENABLED = true; // Isolated future wiring simulation.
-            const r = screen(f.rt, name); await r.settle(); await enter(r, 'Restaurant name', 'Real Cafe');
-            await enter(r, 'Restaurant address', '100 Market'); await f.clock.advance(400, r); realRows(r)[0].props.onPress(); await r.settle();
-            assert.equal(selectedProps.selection.selectionReceipt, item.selectionReceipt);
-            if (name === 'add-visit') await toggleGroup(r, 'Dinner');
-            await click(r, name === 'add-visit' ? 'Save Visit' : 'Save Personal Place');
-            const save = f.rt.world.requests.find(call => call.method === 'POST'); assert(save);
-            assert(!JSON.stringify(save.body).includes(item.selectionReceipt)); assert(!JSON.stringify(save.body).includes(String(item.latitude)));
-            assert(!Object.keys(save.body).some(key => /receipt|coordinate|latitude|longitude/.test(key)));
-            assert(!f.rt.world.requests.some(call => call.url.pathname.includes('attach_verified'))); r.unmount();
-        }
     });
     console.log(passed + ' offline address autocomplete component/form checks passed.');
 })().catch(error => { console.error(error); process.exitCode = 1; });

@@ -1,5 +1,7 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { selectTabRoot } from "@/lib/tab-navigation";
+import { isConfirmedAdd } from "@/lib/unified-add";
+import { useUnifiedAdd } from "@/providers/unified-add";
 import { TabLeaveContext, type TabLeaveHandler } from "@/providers/tab-leave";
 import { Tabs } from "expo-router";
 import { useRef, type ComponentProps } from "react";
@@ -14,14 +16,19 @@ const icons: Record<string, ComponentProps<typeof Ionicons>["name"]> = {
 
 export default function TabLayout() {
     const leaveHandler = useRef<TabLeaveHandler | null>(null);
+    const { coordinator } = useUnifiedAdd();
     return <TabLeaveContext.Provider value={leaveHandler}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
             <Tabs initialRouteName="index" backBehavior="history" screenListeners={({ navigation, route }) => ({
                 tabPress: event => {
+                    const select = async () => {
+                        if (route.name === "add" && isConfirmedAdd(coordinator.state) && !await coordinator.clearConfirmed()) return;
+                        selectTabRoot(navigation, route.key);
+                    };
                     if (leaveHandler.current) {
                         event.preventDefault();
-                        leaveHandler.current(() => selectTabRoot(navigation, route.key));
-                    }
+                        leaveHandler.current(() => { void select(); });
+                    } else if (route.name === "add") { event.preventDefault(); void select(); }
                 },
             })} screenOptions={({ route }) => ({
                 headerShown: false,

@@ -67,7 +67,7 @@ export default function PersonalApplePlaceLookup({ applePlaceId, disabled, readS
         }
     }
 
-    if (!applePlaceId && !readSavedId) return <Text style={styles.message}>No Apple Place ID is saved for this place.</Text>;
+    if (!applePlaceId && !readSavedId) return <Text style={styles.message}>No Apple Place ID is saved for this place. An Apple Place ID is optional; map coordinates are saved separately.</Text>;
     if (!available) return <Text style={styles.message}>Apple map lookup requires a compatible local iOS debug build. Your saved information remains available.</Text>;
     if (!supported) return <Text style={styles.message}>Apple Place ID lookup requires iOS 18 or later and an updated local debug build. Your saved information remains available.</Text>;
     return <View>

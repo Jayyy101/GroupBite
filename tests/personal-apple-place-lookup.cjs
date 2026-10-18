@@ -38,7 +38,8 @@ function setup(options = {}) {
 const markers = r => nodes(r.output).filter(n => n.type === 'Marker');
 const lookupButton = r => button(r, 'Look up saved Apple Place ID');
 function readOnly(f) {
-    assert(f.rt.world.requests.every(call => call.method === 'GET' && call.url.pathname === '/rest/v1/personal_places'));
+    assert(f.rt.world.requests.every(call => (call.method === 'GET' && ['/rest/v1/personal_places','/rest/v1/personal_visits'].includes(call.url.pathname))
+        || (call.method === 'POST' && ['/rest/v1/rpc/get_saved_locations','/rest/v1/rpc/get_personal_mapkit_locations'].includes(call.url.pathname))));
     assert.equal(f.rt.world.localReads, 0); assert.equal(f.rt.world.localWrites, 0);
 }
 async function test(name, fn) { await fn(); passed++; console.log('PASS ' + name); }

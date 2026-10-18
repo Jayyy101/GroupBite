@@ -39,6 +39,7 @@ export async function listPersonalMapPins(userId: string, parent: AbortSignal): 
         const pins: PersonalMapPin[] = [], seen = new Set<string>();
         // Migration 8 bounds offsets to 100000. Pagination counts unresolved rows
         // too, so manual places cannot hide resolved rows on later pages.
+        let completed = false;
         for (let offset = 0; offset <= 100000; offset += PAGE_SIZE) {
             await sessionToken();
             const result = await supabase.rpc("get_saved_locations", {
@@ -62,8 +63,31 @@ export async function listPersonalMapPins(userId: string, parent: AbortSignal): 
                 pins.push({ id: row.saved_id, name: row.name, address: row.address, latitude: row.latitude, longitude: row.longitude });
             }
             if (result.data.length < PAGE_SIZE) {
-                await sessionToken(); // An in-flight account change must not publish the old user's pins.
-                return pins;
+                completed = true; break;
+            }
+        }
+        if (!completed) throw new PersonalMapError(FAILURE);
+        // Selected native points remain separate from server-verified metadata.
+        // Prefer an existing verified pin; never infer coordinates or Apple IDs.
+        const mapped = new Set(pins.map(pin => pin.id)), selected = new Set<string>();
+        for (let offset = 0; offset <= 100000; offset += PAGE_SIZE) {
+            const pointToken = await sessionToken();
+            const result = await supabase.rpc("get_personal_mapkit_locations", { page_size: PAGE_SIZE, page_offset: offset })
+                .setHeader("Authorization", `Bearer ${pointToken}`).abortSignal(controller.signal).retry(false);
+            active();
+            if (result.error?.code === "PGRST202") throw new PersonalMapError("Apple Maps locations need the pending backend update. Your saved cards and visits are unchanged.");
+            if (result.error || !Array.isArray(result.data) || result.data.length > PAGE_SIZE) throw new PersonalMapError(FAILURE);
+            for (const row of result.data) {
+                if (!row || row.owner_user_id !== userId || !uuid(row.id) || selected.has(row.id)
+                    || !text(row.name,100) || !text(row.address,300) || !coordinate(row.latitude,90) || !coordinate(row.longitude,180)
+                    || (row.latitude === 0 && row.longitude === 0)) throw new PersonalMapError(FAILURE);
+                selected.add(row.id);
+                if (!mapped.has(row.id)) {
+                    pins.push({ id: row.id, name: row.name, address: row.address, latitude: row.latitude, longitude: row.longitude }); mapped.add(row.id);
+                }
+            }
+            if (result.data.length < PAGE_SIZE) {
+                await sessionToken(); return pins;
             }
         }
         throw new PersonalMapError(FAILURE);

@@ -294,7 +294,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
                 <>
                     <Text style={styles.message}>{isOwner ? "You are the Owner." : "You are a Member."}</Text>
                     {confirmation && <GroupMembershipConfirmation action={confirmation} busy={busy} onConfirm={handleMembership} onCancel={() => setConfirmation(null)} />}
-                    <Pressable accessibilityRole="button" disabled={blocked} onPress={() => router.push({ pathname: "/add-visit", params: { groupId } })} style={[styles.primaryButton, blocked && styles.disabled]}>
+                    <Pressable accessibilityRole="button" disabled={blocked} onPress={() => router.push("/add")} style={[styles.primaryButton, blocked && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Restaurant / Visit</Text>
                     </Pressable>
                     <Text style={styles.label}>Saved restaurants</Text>

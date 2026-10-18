@@ -10,6 +10,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
+const mapkitLocations = args.at(-1) === '--mapkit-locations';
+if (mapkitLocations) args.pop();
+const milestone18 = mapkitLocations || args.at(-1) === '--milestone18';
+if (args.at(-1) === '--milestone18') args.pop();
 assert(args.length === 4 && args[0] === '--postgres-bin' && args[2] === '--pg-module' && path.isAbsolute(args[1]) && path.isAbsolute(args[3]),
     'Supply explicit local --postgres-bin and --pg-module paths');
 assert(process.getuid?.() !== 0, 'Use an ordinary local user');
@@ -63,6 +67,8 @@ async function main() {
     assert.equal(migrations.length, 14); assert.equal(migrations[11], '20261011001200_restaurant_catalog_privacy.sql');
     assert.equal(migrations[12], '20261013001300_personal_apple_place_ids.sql');
     for (const migration of migrations.slice(0, 13)) await admin.query(await source('migrations/' + migration));
+    const versions = (await admin.query("select current_setting('server_version') postgres,extensions.postgis_lib_version() postgis")).rows[0];
+    console.log(`Local tooling: PostgreSQL ${versions.postgres}; PostGIS ${versions.postgis}; Unix socket only`);
     await admin.query("insert into auth.users values($1,'{}'),($2,'{}'),($3,'{}')", [owner, other, member]);
     await admin.query('begin; set local role authenticated');
     await admin.query("select set_config('request.jwt.claim.sub',$1,true)", [owner]);
@@ -123,7 +129,7 @@ async function main() {
     console.log('PASS parameterized NUL rejection and isolation guard');
     await source('tests/group_apple_place_ids_concurrency.mjs');
     const { runGroupAppleConcurrency } = await import('./group_apple_place_ids_concurrency.mjs');
-    await runGroupAppleConcurrency({ admin,a,b,owner,other,member });
+    if (!milestone18) await runGroupAppleConcurrency({ admin,a,b,owner,other,member });
     for (const suite of ['group_membership_lifecycle.sql','restaurant_catalog_privacy.sql','personal_apple_place_ids.sql']) {
         await admin.query("select set_config('groupbite.local_validation','personal-apple-place-ids',false)");
         await admin.query(await source('tests/' + suite)); console.log('PASS post-Migration-14 regression: ' + suite);
@@ -131,7 +137,82 @@ async function main() {
     await source('tests/restaurant_catalog_privacy_concurrency.mjs');
     const { runCatalogPrivacyConcurrency } = await import('./restaurant_catalog_privacy_concurrency.mjs');
     await admin.query("select set_config('groupbite.local_validation','restaurant-catalog-privacy',false)");
-    await runCatalogPrivacyConcurrency({ admin,a,b,owner,other });
+    if (!milestone18) await runCatalogPrivacyConcurrency({ admin,a,b,owner,other });
+    if (milestone18) {
+        // Legacy duplicates and incomplete memories must survive the cutover.
+        await admin.query('begin; set local role authenticated');
+        await admin.query("select set_config('request.jwt.claim.sub',$1,true)", [owner]);
+        await admin.query(`insert into public.personal_places(name,address,client_request_id,visited_on,rating,would_go_again,notes) values
+            ('M18 legacy duplicate','Legacy address','m18-legacy-a',null,3,false,'Legacy private memory'),
+            ('M18 legacy duplicate','Legacy address','m18-legacy-b','2026-09-01',null,null,null),
+            ('M18 legacy empty','Legacy empty address','m18-legacy-empty',null,null,null,null)`);
+        await admin.query('commit');
+        const existingRows = {};
+        for (const table of tables) existingRows[table] = (await admin.query(`select to_jsonb(t) row from public.${table} t order by to_jsonb(t)::text`)).rows;
+        const oldFunctions = (await admin.query(`select p.oid,pg_get_functiondef(p.oid) definition,p.proacl::text
+            from pg_proc p where p.pronamespace='public'::regnamespace and p.prokind='f' order by p.oid`)).rows;
+        for (const migration of ['20261017001500_personal_visit_history.sql','20261017001600_unified_add_destinations.sql']) {
+            await admin.query(await source('migrations/' + migration));
+        }
+        for (const table of tables) assert.deepEqual((await admin.query(`select to_jsonb(t) row from public.${table} t order by to_jsonb(t)::text`)).rows, existingRows[table]);
+        assert.deepEqual((await admin.query(`select p.oid,pg_get_functiondef(p.oid) definition,p.proacl::text
+            from pg_proc p where p.oid=any($1::oid[]) order by p.oid`, [oldFunctions.map(f => f.oid)])).rows, oldFunctions);
+        console.log('PASS M18 migrations preserve every existing row, including locations and both legacy receipts/bindings');
+        console.log('PASS M18 cutover preserves all existing function definitions, identities and execution grants');
+        // Run the existing group/16D contracts AGAIN against the final schema.
+        // The old personal suite intentionally expects direct INSERT/UPDATE;
+        // its cutover replacements are in unified_add.sql.
+        for (const suite of ['group_apple_place_ids.sql','group_membership_lifecycle.sql','restaurant_catalog_privacy.sql']) {
+            await admin.query("select set_config('groupbite.local_validation','group-apple-place-ids',false)");
+            await admin.query(await source('tests/' + suite));
+            console.log('PASS post-M18 regression: ' + suite);
+        }
+        await runGroupAppleConcurrency({ admin,a,b,owner,other,member });
+        await admin.query("select set_config('groupbite.local_validation','restaurant-catalog-privacy',false)");
+        await runCatalogPrivacyConcurrency({ admin,a,b,owner,other });
+        await admin.query("select set_config('groupbite.local_validation','m18-unified-add',false)");
+        await admin.query(await source('tests/unified_add.sql'));
+        console.log('PASS M18 personal history, scoped identities, RLS, permissions, deletion and atomic receipt failures');
+        for (const [name, sql, values] of [
+            ['personal', "select public.save_personal_visit('m18-input-guard','Cafe','Address',restaurant_apple_place_id=>$1)", ['in\0side']],
+            ['group', "select public.save_group_visit_destination('m18-input-guard',$2,'Cafe','Address',restaurant_apple_place_id=>$1)", ['in\0side',group]],
+        ]) {
+            await admin.query('begin; set local role authenticated');
+            await admin.query("select set_config('request.jwt.claim.sub',$1,true)", [owner]);
+            await assert.rejects(admin.query(sql,values), { code: '22021' });
+            await admin.query('rollback');
+            await admin.query('begin isolation level repeatable read; set local role authenticated');
+            await admin.query("select set_config('request.jwt.claim.sub',$1,true)", [owner]);
+            await assert.rejects(admin.query(sql,values.map(value => value === 'in\0side' ? 'valid-id' : value)), { code: '25001' });
+            await admin.query('rollback');
+            console.log(`PASS M18 ${name} RPC: parameterized NUL rejection and isolation guard`);
+        }
+        await source('tests/unified_add_concurrency.mjs');
+        const { runUnifiedAddConcurrency } = await import('./unified_add_concurrency.mjs');
+        await runUnifiedAddConcurrency({admin,a,b,owner,other,member});
+    }
+    if (mapkitLocations) {
+        const preservedTables=[...tables,'personal_visits','add_destination_requests'];
+        const rows=async()=>Object.fromEntries(await Promise.all(preservedTables.map(async table=>[table,
+            (await admin.query(`select to_jsonb(t) row from public.${table} t order by to_jsonb(t)::text`)).rows])));
+        const beforeRows=await rows();
+        const oldFunctions=(await admin.query("select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where pronamespace='public'::regnamespace and prokind='f' order by oid")).rows;
+        await admin.query(await source('migrations/20261018001700_personal_mapkit_locations.sql'));
+        assert.deepEqual(await rows(),beforeRows);
+        assert.deepEqual((await admin.query('select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where oid=any($1::oid[]) order by oid',[oldFunctions.map(f=>f.oid)])).rows,oldFunctions);
+        console.log('PASS migration 17 preserves every original row and all pre-existing function bodies/grants');
+        await admin.query("select set_config('groupbite.local_validation','m18-mapkit-locations',false)");
+        await admin.query(await source('tests/personal_mapkit_locations.sql'));
+        assert.deepEqual(await rows(),beforeRows);
+        console.log('PASS MapKit location SQL: null/present IDs, atomic rollback, idempotency, repair, RLS and address/deletion safety');
+        await source('tests/personal_mapkit_locations_concurrency.mjs');
+        const {runMapkitLocationConcurrency}=await import('./personal_mapkit_locations_concurrency.mjs');
+        await runMapkitLocationConcurrency({admin,a,b,owner,other});
+        for (const suite of ['group_apple_place_ids.sql','group_membership_lifecycle.sql','restaurant_catalog_privacy.sql','unified_add.sql']) {
+            await admin.query("select set_config('groupbite.local_validation',$1,false)",[suite==='unified_add.sql'?'m18-unified-add':'group-apple-place-ids']);
+            await admin.query(await source('tests/'+suite));console.log('PASS post-migration-17 regression: '+suite);
+        }
+    }
     for (const [file, hash] of hashes) assert.equal(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'), hash);
     console.log('PASS all migration/test input hashes unchanged during validation');
 }

@@ -1,3 +1,9 @@
+> Milestone 18 supersedes the historical separate-creation and frozen group
+> replay behavior described below. Existing group visit management and tab safety
+> remain; see the [current completion report](milestone-18-completion.md) and
+> [creation/recovery contract](milestone-18-unified-add.md). The frozen Add Visit
+> replay paragraph below describes the former flow, not unified Add recovery.
+
 # Authentication and tabs
 
 All main routes live under `app/(app)/_layout.tsx`, which waits for the existing
@@ -10,13 +16,16 @@ Token refresh for the same account does not reset navigation.
 `(app)` and `(tabs)` are URL-free route groups. Existing paths such as
 `/my-places`, `/add-visit`, `/group/:id`, and `/personal-place/:id` still work.
 Home, My Places, Add, Groups and Account remain the same styled JavaScript
-Expo Router tabs. My Places, Groups and Account each contain a native Stack:
+Expo Router tabs. My Places, Add, Groups and Account each contain a native Stack:
 
 ```text
 (app)/
   (tabs)/
     index.tsx                         Home
-    add.tsx                           Add landing
+    add/_layout.tsx                   Add Stack; clean root /add
+      index.tsx                       landing, Saved and previous recovery
+      personal-place/[id].tsx          result-origin personal detail
+      group/[id]/restaurant/[entryId].tsx  result-origin group detail
     (my-places)/_layout.tsx            initialRouteName: my-places
       my-places.tsx
       personal-place/[id].tsx
@@ -28,8 +37,9 @@ Expo Router tabs. My Places, Groups and Account each contain a native Stack:
       account.tsx
       saved-places.tsx
       place/[id].tsx
-  personal-place-form.tsx
-  add-visit.tsx
+  personal-place-form.tsx             facts editor; create links redirect to Add
+  personal-visit-form.tsx             personal visit edit/delete
+  add-visit.tsx                       unified destination form
   add-place.tsx                       archive editor; no id redirects to Add Visit
   dev-map.tsx
   dev-apple-search.tsx
@@ -53,7 +63,7 @@ Local Create/Join exits use the same guard. Discard clears input without issuing
 a mutation. Active Create/Join, personal/archive saves and inline Visit mutations
 block leaving; account replacement/sign-out always disposes their guards.
 
-Add Visit retains its existing explicit **Stay and Keep Submission / Leave
+The former Add Visit flow retained its explicit **Stay and Keep Submission / Leave
 Anyway** warning during pending/uncertain saves, now also covering a frozen
 submission paused before dispatch. Deliberate abandonment suppresses late results;
 exact retry keeps the original account, RPC, request ID, groups, fields and Apple
@@ -112,19 +122,16 @@ Inline Visit requests/reconciliation and Group creation preflights/requests have
 20-second response deadlines. A deadline bounds the client wait, not the server
 transaction; uncertain writes remain locked, ignore late results and never retry.
 
-Successful personal saves dismiss the parent form into the saved personal detail
-under My Places. Successful single-group saves use the RPC's shared restaurant ID
-and an authorized `get_group_restaurants` read to resolve the distinct **entryId**,
-then dismiss into that group's restaurant/history under Groups. Add Another Visit
-continues to pass **restaurantId**, never entryId. Multi-group saves dismiss to
-Groups root. A failed destination read leaves a completed, locked form whose
-Continue action retries only the read. Cold destinations get their section root
-anchor; completed forms are removed from Back history. Background/blur epochs and
-mounted/account checks suppress stale automatic save/destination navigation.
-
-Add still launches the existing personal or group form; there is no unified save
-operation. The saved restaurant map and native Apple lookup/picker behavior are
-unchanged.
+Milestone 18 replaces separate creation flows with the restaurant-first Add
+landing and one parent-stack visit form. Every destination starts unchecked.
+Single-destination success dismisses the form into the exact saved entry, with
+its tab root anchor. Multiple/partial results dismiss into the Add tab's recovery
+summary, so the completed form is absent from Back history. The account-owned
+coordinator and minimal persistent journal keep destination outcomes reviewable;
+uncertain mutations are reconciled read-only. Personal facts and individual visit
+editors preserve original revisions, draft hiding and leave guards. See
+[Milestone 18](milestone-18-unified-add.md) for current save/recovery and schema
+cutover behavior. Native Apple debug gates and the saved map are unchanged.
 
 Account displays the session email and uses the existing local-scope Supabase
 sign-out. Session persistence, password authentication, providers, and project
@@ -281,3 +288,19 @@ Existing `tests/*.cjs` suites cover personal CRUD/drafts, form navigation, maps,
 autocomplete and Geoapify adapters. All use synthetic sessions and mocked
 transport/storage. They do not establish native Simulator UI behavior or hosted
 authentication settings.
+
+## Current unified Add completion and recovery
+
+Confirmed results clear only after every destination is confirmed and local
+journal removal succeeds. Done and later Add-tab selection return to clean Add.
+Result links push details inside Add's own stack; Back returns to Saved. Normal
+My Places/Groups browsing retains its own parent. The five tabs and existing
+unsaved/uncertain guards remain.
+
+Uncertain writes are never replayed automatically. **Start a separate Add**
+requires explicit confirmation and archives account-scoped recovery markers
+before resetting, giving new saves independent request IDs. Previous save
+recovery offers read-only receipt checks. Storage failure requires a second
+explicit temporary-recovery acknowledgement; it cannot bypass the journal-write
+requirement for new mutations. Leaving a recovery screen alone clears nothing.
+See the [recovery completion contract](milestone-18-recovery-completion.md).

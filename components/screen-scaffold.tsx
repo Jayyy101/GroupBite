@@ -4,13 +4,14 @@ import { useState, type ReactNode, type Ref } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollViewProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-type Props = Pick<ScrollViewProps, "contentContainerStyle" | "keyboardShouldPersistTaps"> & {
+type Props = Pick<ScrollViewProps, "contentContainerStyle" | "keyboardShouldPersistTaps" | "keyboardDismissMode" | "automaticallyAdjustKeyboardInsets"> & {
     children: ReactNode;
     onBack?: () => void;
     busy?: boolean;
     scrollRef?: Ref<ScrollView>;
     edgeToEdge?: boolean;
     title?: string;
+    includeBottomInset?: boolean;
 };
 
 const BACK_SIZE = 44;
@@ -33,14 +34,16 @@ function CircularBack({ onBack, busy = false, compact = false, onLayout }: Pick<
     </Pressable>;
 }
 
-// Compact scrolling titles are opt-in on the two iOS group details. Other screens retain Astra's
-// protected viewport. The tab navigator owns the bottom inset in both modes.
+// Details/forms opt in to compact edge-to-edge scrolling. Tabs own their bottom
+// inset; full-screen forms explicitly include it and use scroll keyboard insets.
 export function ScreenScaffold({ children, onBack, busy = false, scrollRef,
-    contentContainerStyle, keyboardShouldPersistTaps, edgeToEdge = false, title }: Props) {
+    contentContainerStyle, keyboardShouldPersistTaps, keyboardDismissMode, automaticallyAdjustKeyboardInsets,
+    includeBottomInset = false, edgeToEdge = false, title }: Props) {
     const insets = useSafeAreaInsets();
     if (edgeToEdge && onBack && Platform.OS === "ios") {
         return <EdgeToEdgeScaffold onBack={onBack} busy={busy} scrollRef={scrollRef}
-            contentContainerStyle={contentContainerStyle} keyboardShouldPersistTaps={keyboardShouldPersistTaps} title={title}>
+            contentContainerStyle={contentContainerStyle} keyboardShouldPersistTaps={keyboardShouldPersistTaps} title={title}
+            keyboardDismissMode={keyboardDismissMode} automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets} includeBottomInset={includeBottomInset}>
             {children}
         </EdgeToEdgeScaffold>;
     }
@@ -50,10 +53,11 @@ export function ScreenScaffold({ children, onBack, busy = false, scrollRef,
             <CircularBack onBack={onBack} busy={busy} />
         </View>}
         <ScrollView ref={scrollRef} style={styles.viewport}
-            contentContainerStyle={[backendStyles.content, styles.content, contentContainerStyle, horizontal]}
+            contentContainerStyle={[backendStyles.content, styles.content, contentContainerStyle, horizontal, includeBottomInset && { paddingBottom: 32 + insets.bottom }]}
             contentInsetAdjustmentBehavior="never" automaticallyAdjustContentInsets={false}
             automaticallyAdjustsScrollIndicatorInsets={false}
-            keyboardShouldPersistTaps={keyboardShouldPersistTaps}>
+            keyboardShouldPersistTaps={keyboardShouldPersistTaps} keyboardDismissMode={keyboardDismissMode}
+            automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets}>
             {title !== undefined && <Text style={backendStyles.title}>{title}</Text>}
             {children}
         </ScrollView>
@@ -61,7 +65,7 @@ export function ScreenScaffold({ children, onBack, busy = false, scrollRef,
 }
 
 function EdgeToEdgeScaffold({ children, onBack, busy, scrollRef,
-    contentContainerStyle, keyboardShouldPersistTaps, title }: Props & { onBack: () => void }) {
+    contentContainerStyle, keyboardShouldPersistTaps, keyboardDismissMode, automaticallyAdjustKeyboardInsets, includeBottomInset, title }: Props & { onBack: () => void }) {
     const insets = useSafeAreaInsets();
     const [backHeight, setBackHeight] = useState(BACK_SIZE);
     const backTop = insets.top + 4;
@@ -80,11 +84,13 @@ function EdgeToEdgeScaffold({ children, onBack, busy, scrollRef,
             contentContainerStyle={[backendStyles.content, contentContainerStyle, {
                 paddingTop: backTop + backHeight + 8,
                 paddingLeft: left, paddingRight: right,
+                ...(includeBottomInset ? { paddingBottom: 32 + insets.bottom } : {}),
             }]}
             contentInsetAdjustmentBehavior="never" automaticallyAdjustContentInsets={false}
             automaticallyAdjustsScrollIndicatorInsets={false}
             scrollIndicatorInsets={{ top: insets.top }}
-            keyboardShouldPersistTaps={keyboardShouldPersistTaps}>
+            keyboardShouldPersistTaps={keyboardShouldPersistTaps} keyboardDismissMode={keyboardDismissMode}
+            automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets}>
             {title !== undefined && <Text accessibilityRole="header" style={styles.compactTitle}>{title}</Text>}
             {children}
         </ScrollView>

@@ -12,7 +12,7 @@ export function isVisitDate(value: string): boolean {
     return year > 0 && date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day;
 }
 
-export function visitSummary(restaurant: GroupRestaurantSummary): string {
+export function visitSummary(restaurant: Pick<GroupRestaurantSummary, "average_rating" | "rated_visit_count" | "total_visit_count">): string {
     const rating = restaurant.average_rating === null ? "No ratings yet" : `Average ${restaurant.average_rating.toFixed(1)}/5`;
     return `${rating} · ${restaurant.rated_visit_count} rated / ${restaurant.total_visit_count} total visits`;
 }

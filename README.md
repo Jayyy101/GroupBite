@@ -1,3 +1,7 @@
+> Current status: [Milestone 18 completion and commit review](docs/milestone-18-completion.md).
+> The earlier milestone instructions below describe their original checkpoints;
+> use the current report for deployment state, creation flows and acceptance gaps.
+
 # Welcome to your Expo app 👋
 
 GroupBite's current app starts with Supabase authentication and has Home, My
@@ -138,6 +142,21 @@ Manual iPhone simulator checks using the existing configured development app:
 Saving a mock address saves its fictional text through the normal save flow;
 there is no coordinate attachment. Use disposable test entries for these checks.
 
-## Milestone 16D: group Apple Place IDs
+## Milestone 16D: group Apple Place IDs (historical checkpoint)
 
 Migration 14 was deployed to hosted GroupBite; migrations 1–14 are synchronized and all 11 read-only post-deployment verification checks passed, as confirmed by the owner. Group Apple Place ID support adds atomic visit/ID saving, owner-only NULL fills, exact frozen retries, shared-address invalidation, and development-only group picker/detail lookup. Apple functionality remains development-only. Migrations 1–13 remain unchanged. Manual release-binary and after-commit response-loss simulator coverage remain pending, along with separate hosted `rls_auto_enable()` / `ensure_rls` provenance verification and documentation. See [the contract, validation commands and simulator acceptance results](docs/milestone-16d-group-apple-place-ids.md).
+
+## Milestone 18: completed implementation, final commit review
+
+Unified Add, personal visit history, destination-scoped navigation, persistent
+Apple Maps coordinates and explicit separate-workflow recovery are implemented.
+Migrations **15–17 are deployed and verified** on the confirmed GroupBite project;
+do not reapply them. The owner verified the existing In-N-Out location-only
+repair, Special Noodle's automatic personal map pin, and recent selection with
+all destinations unchecked and Back returning to clean Add without saving.
+
+See the [current completion and commit review](docs/milestone-18-completion.md)
+for the complete file manifest, validation, remaining acceptance checks and
+friends-testing gates. The [implementation contract](docs/milestone-18-unified-add.md)
+and phase reports retain the historical evidence. No hosted cleanup or fixture
+population has run. Staging, commit and push remain separately authorized actions.

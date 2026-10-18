@@ -62,6 +62,10 @@ function layoutRuntime() {
         assert.equal(api.authReturnTo('/personal-place-form', { id: 'edit-me' }), '/personal-place-form?id=edit-me');
         assert.equal(api.authReturnTo('/add-place', { id: 'legacy' }), '/add-place?id=legacy');
         assert.equal(api.authReturnTo('/group/a/restaurant/b', { id: 'a', entryId: 'b', source: 'link' }), '/group/a/restaurant/b?source=link');
+        assert.equal(api.authReturnTo('/add/group/a/restaurant/b', { id: 'a', entryId: 'b' }), '/add/group/a/restaurant/b');
+        assert.equal(api.safeAuthReturnTo('/add/personal-place/a'), '/add/personal-place/a');
+        assert.equal(api.safeAuthReturnTo('/add/group/a/restaurant/b'), '/add/group/a/restaurant/b');
+        assert.equal(api.safeAuthReturnTo('/add/other-route'), '/');
         rt.world.params = { returnTo: '/add-visit?groupId=group-a' };
         const r = screen(rt, 'auth'); await r.settle(); assert.equal(r.output.props.href, rt.world.params.returnTo); r.unmount();
         rt.switch(null); const auth = screen(rt, 'auth'); await auth.settle();
@@ -110,11 +114,10 @@ function layoutRuntime() {
             assert.equal(rt.world.localWrites, 0); r.unmount();
         }
     });
-    await test('Add launches existing private and group forms without reading or writing memories', async () => {
+    await test('Add launches the unified form and never writes memories', async () => {
         const rt = runtime(), r = screen(rt, 'add'); await r.settle();
-        await click(r, 'Only me'); assert.equal(rt.world.navigation.at(-1), '/personal-place-form');
-        await click(r, 'Add a group visit'); assert.equal(rt.world.navigation.at(-1), '/add-visit');
-        assert.equal(rt.world.requests.length, 0); assert.equal(rt.world.localWrites, 0); r.unmount();
+        await click(r, 'Enter Restaurant Manually'); assert.equal(rt.world.navigation.at(-1), '/add-visit');
+        assert(rt.world.requests.every(call=>call.url.pathname.endsWith('/get_recent_add_restaurants'))); assert.equal(rt.world.localWrites, 0); r.unmount();
     });
     await test('Supabase restoration, auth events and refresh lifecycle remain persistent and race-safe', async () => {
         const rt = runtime({ platform: 'ios', mocks: { '@/providers/auth': undefined } }), pending = defer(), events = [];

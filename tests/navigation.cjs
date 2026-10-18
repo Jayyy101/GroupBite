@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
 const ts = require('typescript');
-const { runtime, fixture, response, screen, click, enter, fill, nodes, textOf, button } = require('./personal-places.cjs');
+const { runtime, fixture, response, screen, click, enter, nodes, textOf, button } = require('./personal-places.cjs');
 const routing = require('./router-fixture.cjs');
 const groupId = '22222222-2222-2222-2222-222222222222';
 const otherGroupId = '33333333-3333-3333-3333-333333333333';
@@ -14,7 +14,7 @@ const restaurant = { id: entryId, restaurant_id: restaurantId, name: 'Cafe', add
 const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 let passed = 0;
 async function test(label, fn) { await fn(); passed++; console.log('PASS ' + label); }
-function noForms(h) { assert(!h.allNames().some(n => ['personal-place-form', 'add-visit', 'add-place'].includes(n))); }
+function noForms(h) { assert(!h.allNames().some(n => ['add-place'].includes(n))); }
 function backend(call) {
     switch (call.url.pathname) {
         case '/rest/v1/groups': return response([{ id: groupId, name: 'Dinner', owner_user_id: 'a' }, { id: otherGroupId, name: 'Lunch', owner_user_id: 'a' }]);
@@ -114,6 +114,50 @@ function tabPress(r, h, name) {
         if (call.url.pathname.endsWith('/get_group_members')) return response([]);
         return restaurantBackend(call);
     }
+    await test('Result-opened details stay inside Add and custom/native Back return to its summary', async () => {
+        for (const kind of ['personal', 'group']) for (const nativeBack of [false,true]) {
+            const h=history('/group/'+otherGroupId);h.router.push('/add');
+            const href=kind==='personal'?{pathname:'/add/personal-place/[id]',params:{id:fixture().id}}
+                :{pathname:'/add/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}};
+            h.router.push(href);const rt=runtime({router:h.router,...(kind==='group'?{fetch:restaurantBackend}:{})});
+            rt.world.rows=[fixture()];rt.world.params=href.params;
+            const r=screen(rt,kind==='personal'?'add/personal-place/[id]':'add/group/[id]/restaurant/[entryId]');await r.settle();
+            assert(textOf(r.output).includes(kind==='personal'?'Private Cafe':'Cafe'));
+            assert.equal(h.chain()[2].name,'add');assert.equal(h.chain()[2].state.routes[0].name,'index');
+            if(nativeBack)h.router.back();else await click(r,'Back');
+            assert.equal(h.chain()[2].name,'add');assert.equal(h.current().name,'index');r.unmount();
+        }
+    });
+    await test('Normal detail Back returns to My Places or its own group after browsing another group', async () => {
+        for (const kind of ['personal','group']) {
+            const h=history('/group/'+otherGroupId);
+            if(kind==='personal'){h.router.push('/my-places');h.router.push({pathname:'/personal-place/[id]',params:{id:fixture().id}});}
+            else {h.router.push({pathname:'/group/[id]',params:{id:groupId}});h.router.push({pathname:'/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}});}
+            const rt=runtime({router:h.router,...(kind==='group'?{fetch:restaurantBackend}:{})});rt.world.rows=[fixture()];rt.world.params={id:kind==='personal'?fixture().id:groupId,entryId};
+            const r=screen(rt,kind==='personal'?'personal-place/[id]':'group/[id]/restaurant/[entryId]');await r.settle();await click(r,'Back');
+            assert.equal(h.current().name,kind==='personal'?'my-places':'group/[id]');if(kind==='group')assert.equal(h.current().params.id,groupId);r.unmount();
+        }
+    });
+    await test('Result-opened group edits keep dirty-form protection for both Back and native removal', async () => {
+        const h=history('/add');h.router.push({pathname:'/add/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}});
+        let rt;rt=runtime({fetch:restaurantBackend,router:{...h.router,back:()=>rt.attemptRemoval({type:'POP'},h.router.back)}});
+        rt.world.params={id:groupId,entryId};const r=screen(rt,'add/group/[id]/restaurant/[entryId]');await r.settle();
+        await click(r,'Edit Visit');await enter(r,'Edit visit notes','Unsent change');await click(r,'Back');
+        assert(textOf(r.output).includes('Discard unsaved changes?'));await click(r,'Stay');assert.equal(h.current().params.entryId,entryId);
+        assert(rt.attemptRemoval({type:'POP'},h.router.back));await r.settle();await click(r,'Stay');
+        assert.equal(h.chain()[2].name,'add');assert.equal(rt.world.requests.filter(c=>/(update|delete)_group_visit$/.test(c.url.pathname)).length,0);r.unmount();
+    });
+    await test('Personal facts and visit editors retain the Saved-summary return path', async () => {
+        for (const editor of ['personal-place-form','personal-visit-form']) {
+            const h=history('/add');h.router.push({pathname:'/add/personal-place/[id]',params:{id:fixture().id}});
+            const rt=runtime({router:h.router});rt.world.params={id:fixture().id};rt.world.rows=[fixture()];
+            rt.world.visits=[{id:entryId,personal_place_id:fixture().id,owner_user_id:'a',revision:1,origin:'visit',visited_on:null,rating:null,would_go_again:null,notes:'Original'}];
+            const details=screen(rt,'add/personal-place/[id]');await details.settle();await click(details,editor==='personal-place-form'?'Edit Personal Place':'Edit Visit');
+            assert.equal(h.current().params.fromAdd,'1');rt.world.params=h.current().params;details.unmount();
+            const r=screen(rt,editor);await r.settle();await click(r,'Back');
+            assert.equal(h.chain()[2].name,'add');assert.equal(h.current().name,'personal-place/[id]');h.router.back();assert.equal(h.current().name,'index');r.unmount();
+        }
+    });
     function assertScaffold(r, insets, hasBack, edgeToEdge = false) {
         const scroll = nodes(r.output).find(n => n.type === 'ScrollView');
         const root = flatten(r.output.props.style), content = flatten(scroll.props.contentContainerStyle);
@@ -279,7 +323,7 @@ function tabPress(r, h, name) {
             const rt = runtime({ platform: 'ios', safeAreaInsets: insets, ...(route === 'groups' ? { fetch: backend } : {}) });
             const r = screen(rt, route); await r.settle();
             const scroll = assertScaffold(r, insets, false);
-            assert.equal(scroll.props.keyboardShouldPersistTaps, route === 'groups' ? 'handled' : undefined);
+            assert.equal(scroll.props.keyboardShouldPersistTaps, ['groups','add'].includes(route) ? 'handled' : undefined);
             r.unmount();
         }
         for (const route of ['groups', 'my-places']) {
@@ -345,37 +389,8 @@ function tabPress(r, h, name) {
         pending.resolve(response({ code: '22023', message: 'Rejected for test' }, 400)); await saving; await r.settle();
         assert.equal(button(r, 'Back').props.disabled, false); r.unmount();
     });
-    await test('Personal saves from Add, My Places and direct entry remove the form and anchor My Places', async () => {
-        for (const origin of ['/add', '/my-places', '/personal-place-form']) {
-            const h = history(origin); if (origin !== '/personal-place-form') h.router.push('/personal-place-form');
-            const rt = runtime({ router: h.router }), r = screen(rt, 'personal-place-form');
-            await r.settle(); await fill(r); await click(r, 'Save Personal Place'); noForms(h);
-            assert.equal(h.chain()[2].name, '(my-places)'); assert.equal(h.current().params.id, rt.world.rows[0].id);
-            h.router.back(); assert.equal(h.current().name, 'my-places'); r.unmount();
-        }
-    });
-    await test('Personal edit returns to its existing detail and failed saves retain the draft until Discard', async () => {
-        const place = fixture(), h = history('/personal-place/' + place.id), rt = runtime({ router: h.router });
-        rt.world.rows = [place]; rt.world.params = { id: place.id }; h.router.push({ pathname: '/personal-place-form', params: rt.world.params });
-        const r = screen(rt, 'personal-place-form'); await r.settle(); await enter(r, 'Personal notes', 'Edited');
-        rt.world.override = call => call.method === 'PATCH' ? response([], 200) : null;
-        await click(r, 'Save Changes'); assert.equal(h.current().name, 'personal-place-form');
-        await click(r, 'Cancel and Refresh Place'); await click(r, 'Stay'); assert.equal(h.current().name, 'personal-place-form');
-        await click(r, 'Cancel and Refresh Place'); await click(r, 'Discard'); noForms(h); assert.equal(h.current().params.id, place.id); r.unmount();
-        h.router.push({ pathname: '/personal-place-form', params: rt.world.params }); rt.world.override = null;
-        const edit = screen(rt, 'personal-place-form'); await edit.settle(); await enter(edit, 'Personal notes', 'Saved edit'); await click(edit, 'Save Changes');
-        noForms(h); assert.equal(h.chain()[2].state.routes.length, 2); h.router.back(); assert.equal(h.current().name, 'my-places'); edit.unmount();
-    });
-    await test('Reconciled personal save dismisses the uncertain form without another mutation', async () => {
-        const h = history('/personal-place-form'), rt = runtime({ router: h.router });
-        rt.world.override = call => call.method === 'POST' ? response({ message: 'Lost response' }, 400) : null;
-        const r = screen(rt, 'personal-place-form'); await r.settle(); await fill(r); await click(r, 'Save Personal Place');
-        rt.world.rows.push(fixture(rt.world.requests.find(c => c.method === 'POST').body));
-        await click(r, 'Check Saved Result'); noForms(h); assert.equal(h.current().name, 'personal-place/[id]');
-        assert.equal(rt.world.requests.filter(c => c.method === 'POST').length, 1); r.unmount();
-    });
-    await test('Dirty personal and visit forms guard Back/removal; unchanged direct forms close immediately', async () => {
-        for (const name of ['personal-place-form', 'add-visit', 'add-place']) {
+    await test('Legacy archive form guards Back/removal; unchanged direct forms close immediately', async () => {
+        for (const name of ['add-place']) {
             const rt = runtime({ fetch: name === 'add-visit' ? backend : undefined });
             if (name === 'add-place') rt.world.params = { id: 'legacy' };
             const r = screen(rt, name); await r.settle();
@@ -387,43 +402,6 @@ function tabPress(r, h, name) {
             assert.equal(rt.world.navigation.at(-1), 'BACK'); assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0);
             assert.equal(rt.world.localWrites, 0); r.unmount();
         }
-    });
-    await test('Single-group saves open the correct entry history with tabs and remove completed forms', async () => {
-        for (const origin of ['/add', '/groups', '/group/' + groupId, `/group/${groupId}/restaurant/${entryId}`, '/add-visit']) {
-            const h = history(origin), rt = runtime({ router: h.router, fetch: backend });
-            if (origin !== '/add-visit') h.router.push('/add-visit'); rt.world.params = { groupId };
-            const r = screen(rt, 'add-visit'); await r.settle(); await enter(r, 'Restaurant name', 'Cafe'); await enter(r, 'Restaurant address', 'Address');
-            await click(r, 'Save Visit'); noForms(h); assert.equal(h.chain()[2].name, '(groups)');
-            assert.equal(h.current().name, 'group/[id]/restaurant/[entryId]'); assert.equal(h.current().params.entryId, entryId);
-            assert.equal(h.current().params.id, groupId); assert.notEqual(entryId, restaurantId);
-            h.router.back(); noForms(h); r.unmount();
-        }
-    });
-    await test('Failed destination read keeps a completed save locked; Continue only retries the read', async () => {
-        let fail = true;
-        const h = history('/add-visit'), rt = runtime({ router: h.router, fetch: c => c.url.pathname.endsWith('get_group_restaurants') && fail ? response({ message: 'Offline' }, 503) : backend(c) });
-        rt.world.params = { groupId }; const r = screen(rt, 'add-visit'); await r.settle();
-        await enter(r, 'Restaurant name', 'Cafe'); await enter(r, 'Restaurant address', 'Address'); const save = button(r, 'Save Visit').props.onPress;
-        await click(r, 'Save Visit'); assert(textOf(r.output).includes('Visit saved. Could not open')); await save();
-        fail = false; await click(r, 'Continue to Groups'); noForms(h);
-        assert.equal(rt.world.requests.filter(c => c.url.pathname.endsWith('save_restaurant_visit')).length, 1); r.unmount();
-    });
-    await test('Multi-group saves return to Groups root with no form in either stack', async () => {
-        const h = history(`/group/${groupId}/restaurant/${entryId}`), rt = runtime({ router: h.router, fetch: backend });
-        h.router.push('/add-visit'); rt.world.params = { groupId }; const r = screen(rt, 'add-visit'); await r.settle();
-        await enter(r, 'Restaurant name', 'Cafe'); await enter(r, 'Restaurant address', 'Address');
-        const checkbox = nodes(r.output).find(n => n.props?.accessibilityRole === 'checkbox' && textOf(n.props.children).endsWith('Lunch'));
-        checkbox.props.onPress(); await r.settle(); await click(r, 'Save Visit'); noForms(h); assert.equal(h.current().name, 'groups'); r.unmount();
-    });
-    await test('Paused-before-sending visit retains the exact submission and guards removal', async () => {
-        const rt = runtime({ fetch: backend }); rt.world.params = { groupId }; const r = screen(rt, 'add-visit'); await r.settle();
-        await enter(r, 'Restaurant name', 'Cafe'); await enter(r, 'Restaurant address', 'Address');
-        const session = defer(); rt.supabase.auth.getSession = () => session.promise;
-        const pending = button(r, 'Save Visit').props.onPress(); await r.settle(); rt.emit('background'); await r.settle();
-        session.resolve({ data: { session: rt.world.auth.session }, error: null }); await pending; await r.settle();
-        assert(textOf(r.output).includes('paused before sending')); assert.equal(rt.world.requests.filter(c => c.method === 'POST').length, 0);
-        assert(rt.attemptRemoval({ type: 'POP' })); await r.settle(); await click(r, 'Stay and Keep Submission');
-        rt.emit('active'); await r.settle(); await click(r, 'Retry Same Visit Save'); assert.equal(rt.world.requests.filter(c => c.url.pathname.endsWith('save_restaurant_visit')).length, 1); r.unmount();
     });
     await test('Inline Create/Join blocks tab blur/reselect, clears only on Discard, and blocks active submissions', async () => {
         for (const name of ['index', '(groups)']) {
@@ -497,5 +475,6 @@ function tabPress(r, h, name) {
         assert.equal(h.chain()[2].name, '(account)'); assert.equal(h.current().params.id, 'legacy');
         assert.equal(rt.world.localWrites, 1); assert.equal(rt.world.requests.length, 0); r.unmount();
     });
+    await require('./unified-add.cjs').run('navigation');
     console.log(`${passed} nested navigation/leave-safety checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

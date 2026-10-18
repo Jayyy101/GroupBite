@@ -249,7 +249,7 @@ function SignedInGroups({ userId }: { userId: string }) {
             {loading ? <Text style={styles.message}>Loading groups...</Text> : (
                 <>
                     {groups.length > 0 && (
-                        <Pressable accessibilityRole="button" disabled={busy} onPress={() => leave.requestLeave(() => router.push("/add-visit"))} style={styles.primaryButton}>
+                        <Pressable accessibilityRole="button" disabled={busy} onPress={() => leave.requestLeave(() => router.push("/add"))} style={styles.primaryButton}>
                             <Text style={styles.primaryText}>Add Restaurant / Visit</Text>
                         </Pressable>
                     )}

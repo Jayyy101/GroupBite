@@ -8,7 +8,7 @@ const defer = () => { let resolve; const promise = new Promise(r => { resolve = 
 const input = (r, label) => nodes(r.output).find(n => n.type === 'TextInput' && n.props.accessibilityLabel === label);
 const mutations = rt => rt.world.requests.filter(c => /\/(?:update|delete)_group_visit$/.test(c.url.pathname));
 const creations = rt => rt.world.requests.filter(c => c.url.pathname.endsWith('/create_group'));
-const personalWrites = rt => rt.world.requests.filter(c => c.method === 'PATCH');
+const personalWrites = rt => rt.world.requests.filter(c => c.url.pathname.endsWith('/update_personal_place'));
 let passed = 0;
 async function test(label, fn) { await fn(); passed++; console.log('PASS ' + label); }
 async function pause(rt, r) { rt.emit('inactive'); await r.settle(); rt.emit('background'); await r.settle(); }
@@ -200,41 +200,41 @@ function deadlines() {
     });
 
     await test('Personal Edit preserves all fields, hides them during owner verification, and uses the original revision', async () => {
-        const { rt, r } = await personalSetup(); await enter(r, 'Restaurant name', 'Draft name'); await enter(r, 'Personal notes', 'Draft notes');
+        const { rt, r } = await personalSetup(); await enter(r, 'Restaurant name', 'Draft name'); await enter(r, 'Cuisine', 'Draft notes');
         const before = nodes(r.output).filter(n => n.type === 'TextInput').map(n => [n.props.accessibilityLabel, n.props.value]);
         const save = button(r, 'Save Changes').props.onPress; await pause(rt, r); assert.equal(r.output, null);
         const read = defer(); rt.world.override = c => c.method === 'GET' ? read.promise : null; await resume(rt, r);
-        assert(!input(r, 'Personal notes')); await save(); assert.equal(personalWrites(rt).length, 0);
+        assert(!input(r, 'Cuisine')); await save(); assert.equal(personalWrites(rt).length, 0);
         rt.world.override = null; read.resolve(response(fixture())); await r.settle();
         assert.deepEqual(nodes(r.output).filter(n => n.type === 'TextInput').map(n => [n.props.accessibilityLabel, n.props.value]), before);
-        await click(r, 'Save Changes'); assert.equal(personalWrites(rt)[0].url.searchParams.get('revision'), 'eq.1');
-        assert.equal(personalWrites(rt)[0].user, 'a'); assert.equal(rt.world.rows[0].notes, 'Draft notes'); r.unmount();
+        await click(r, 'Save Changes'); assert.equal(personalWrites(rt)[0].body.expected_revision, 1);
+        assert.equal(personalWrites(rt)[0].user, 'a'); assert.equal(rt.world.rows[0].cuisine, 'Draft notes'); r.unmount();
     });
     await test('Personal Edit retains its draft through read failures; missing/foreign records never expose it', async () => {
-        const { rt, r } = await personalSetup(); await enter(r, 'Personal notes', 'Retained edit'); await pause(rt, r);
-        rt.world.override = () => response({ message: 'offline' }, 400); await resume(rt, r); assert(!input(r, 'Personal notes'));
-        rt.world.override = null; await click(r, 'Refresh Place'); assert.equal(input(r, 'Personal notes').props.value, 'Retained edit');
-        await pause(rt, r); rt.world.rows = []; await resume(rt, r); assert(!input(r, 'Personal notes'));
-        rt.switch('b', r); rt.world.rows = [fixture({ owner_user_id: 'b', notes: 'B memory' })]; await r.settle();
-        assert.equal(input(r, 'Personal notes').props.value, 'B memory'); assert.equal(personalWrites(rt).length, 0); r.unmount();
+        const { rt, r } = await personalSetup(); await enter(r, 'Cuisine', 'Retained edit'); await pause(rt, r);
+        rt.world.override = () => response({ message: 'offline' }, 400); await resume(rt, r); assert(!input(r, 'Cuisine'));
+        rt.world.override = null; await click(r, 'Refresh Place'); assert.equal(input(r, 'Cuisine').props.value, 'Retained edit');
+        await pause(rt, r); rt.world.rows = []; await resume(rt, r); assert(!input(r, 'Cuisine'));
+        rt.switch('b', r); rt.world.rows = [fixture({ owner_user_id: 'b', cuisine: 'B memory' })]; await r.settle();
+        assert.equal(input(r, 'Cuisine').props.value, 'B memory'); assert.equal(personalWrites(rt).length, 0); r.unmount();
     });
     await test('Personal Edit pending success and uncertainty remain locked across foregrounding without a second PATCH', async () => {
         for (const success of [true, false]) {
-            const { rt, r } = await personalSetup(); await enter(r, 'Personal notes', 'Pending edit'); const task = defer();
-            rt.world.override = c => c.method === 'PATCH' ? task.promise : null;
+            const { rt, r } = await personalSetup(); await enter(r, 'Cuisine', 'Pending edit'); const task = defer();
+            rt.world.override = c => c.url.pathname.endsWith('/update_personal_place') ? task.promise : null;
             const submit = button(r, 'Save Changes').props.onPress, pending = submit(); await r.settle(); await pause(rt, r);
-            if (success) Object.assign(rt.world.rows[0], { notes: 'Pending edit', revision: 2 });
-            task.resolve(success ? response(rt.world.rows[0]) : response({ message: 'Lost' }, 503)); await pending; await r.settle();
+            if (success) Object.assign(rt.world.rows[0], { cuisine: 'Pending edit', revision: 2 });
+            task.resolve(success ? response([rt.world.rows[0]]) : response({ message: 'Lost' }, 503)); await pending; await r.settle();
             await resume(rt, r); assert(button(r, 'Save Changes').props.disabled); await submit();
             assert.equal(personalWrites(rt).length, 1); assert.equal(rt.world.navigation.length, 0); r.unmount();
         }
     });
     await test('Personal Edit preflight interrupted by a batched lifecycle change never sends the old draft', async () => {
-        const { rt, r } = await personalSetup(); await enter(r, 'Personal notes', 'Paused edit'); const task = defer(), original = rt.supabase.auth.getSession;
+        const { rt, r } = await personalSetup(); await enter(r, 'Cuisine', 'Paused edit'); const task = defer(), original = rt.supabase.auth.getSession;
         rt.supabase.auth.getSession = () => task.promise; const pending = button(r, 'Save Changes').props.onPress(); await r.settle();
         rt.supabase.auth.getSession = original; rt.emit('inactive'); rt.emit('active'); await r.settle();
         task.resolve(await original()); await pending; await r.settle(); assert.equal(personalWrites(rt).length, 0);
-        assert.equal(input(r, 'Personal notes').props.value, 'Paused edit'); r.unmount();
+        assert.equal(input(r, 'Cuisine').props.value, 'Paused edit'); r.unmount();
     });
 
     await test('Lost committed Group creation locks duplicates across lifecycle, tab blur and route remounts', async () => {

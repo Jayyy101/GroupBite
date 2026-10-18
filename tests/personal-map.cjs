@@ -15,12 +15,20 @@ function unresolved(overrides = {}) {
     return saved({ latitude: null, longitude: null, resolution_status: 'unresolved', standardized_address: null,
         resolution_accuracy: null, ...overrides });
 }
+function selected(overrides = {}) {
+    return {id,owner_user_id:'a',name:'Selected native restaurant',address:'50 Fixture Ranch Dr',latitude:37.55,longitude:-122.12,...overrides};
+}
 function setup(options = {}) {
     let rows = options.rows ?? [saved()], failure = false;
     const rt = runtime({ platform: 'ios', development: true,
         mocks: { 'react-native-safe-area-context': { SafeAreaView: 'SafeAreaView' },
             'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' } }, ...options,
         fetch: async call => {
+            if(call.url.pathname === '/rest/v1/rpc/get_personal_mapkit_locations') {
+                assert.equal(call.method,'POST'); assert.equal(call.user,'a');
+                assert.deepEqual(Object.keys(call.body).sort(),['page_offset','page_size']);
+                return options.pointReply ? options.pointReply(call,rt) : response(options.points ?? []);
+            }
             assert.equal(call.url.pathname, '/rest/v1/rpc/get_saved_locations', 'Only the read-only personal RPC is permitted');
             assert.equal(call.method, 'POST'); assert.equal(call.user, 'a');
             assert.deepEqual(Object.keys(call.body).sort(), ['page_offset', 'page_size', 'scope', 'target_group_id']);
@@ -50,7 +58,7 @@ async function failure(fn, rt) {
         const pins = await f.load(); assert.equal(pins.length, 1);
         assert.deepEqual(JSON.parse(JSON.stringify(pins[0])), { id, name: saved().name, address: saved().address,
             latitude: saved().latitude, longitude: saved().longitude });
-        assert.equal(f.rt.world.requests.length, 1); assert.equal(f.rt.world.localWrites, 0);
+        assert.equal(f.rt.world.requests.length, 2); assert.equal(f.rt.world.localWrites, 0);
     });
     await test('Missing or mismatched sessions and pre-cancelled reads never dispatch the RPC', async () => {
         for (const user of [null, 'b']) {
@@ -71,7 +79,7 @@ async function failure(fn, rt) {
     await test('Pagination includes unresolved rows and reads later resolved pins without retries', async () => {
         const rows = Array.from({ length: 200 }, (_, index) => unresolved({ saved_id: `00000000-0000-0000-0000-${String(index).padStart(12, '0')}` }));
         rows.push(saved()); const f = setup({ rows }); const pins = await f.load();
-        assert.equal(pins.length, 1); assert.deepEqual(f.rt.world.requests.map(call => call.body.page_offset), [0, 200]);
+        assert.equal(pins.length, 1); assert.deepEqual(f.rt.world.requests.map(call => call.body.page_offset), [0, 200, 0]);
     });
     await test('Foreign scope rows, invalid geometry, duplicate IDs and malformed responses fail closed', async () => {
         for (const rows of [[saved({ saved_kind: 'group' })], [saved({ group_id: id })], [saved({ restaurant_id: id })],
@@ -150,6 +158,47 @@ async function failure(fn, rt) {
         assert.equal(f.rt.world.requests.length, 0); r.unmount();
         const other = setup({ platform: 'android' }), fallback = screen(other.rt, 'dev-map'); await fallback.settle();
         assert(textOf(fallback.output).includes('available only on iOS')); assert.equal(other.rt.world.requests.length, 0); fallback.unmount();
+    });
+    await test('A native selected point maps without provider ID, verified-location linkage or invented accuracy',async()=>{
+        const f=setup({rows:[unresolved()],points:[selected()]});const pins=await f.load();assert.equal(pins.length,1);
+        assert.equal(pins[0].latitude,37.55);assert.equal(pins[0].address,'50 Fixture Ranch Dr');assert.equal(f.rt.world.localWrites,0);
+    });
+    await test('Existing verified pin wins over a selected native point for the same personal card',async()=>{
+        const f=setup({points:[selected()]});const pins=await f.load();assert.equal(pins.length,1);assert.equal(pins[0].latitude,saved().latitude);
+    });
+    await test('Foreign, duplicated, malformed and invalid native points fail closed instead of leaking or guessing',async()=>{
+        for(const points of [[selected({owner_user_id:'b'})],[selected(),selected()],[selected({id:'bad'})],[selected({name:''})],
+            [selected({address:''})],[selected({latitude:'37'})],[selected({latitude:91})],[selected({longitude:NaN})],[selected({latitude:0,longitude:0})],null]){
+            const f=setup({pointReply:()=>response(points)});await failure(()=>f.load(),f.rt);assert.equal(f.rt.world.requests.length,2);
+        }
+    });
+    await test('Native points page independently and every read remains account pinned',async()=>{
+        const points=Array.from({length:201},(_,i)=>selected({id:`00000000-0000-0000-0000-${String(i).padStart(12,'0')}`}));
+        const f=setup({rows:[],pointReply:call=>response(points.slice(call.body.page_offset,call.body.page_offset+call.body.page_size))});
+        const pins=await f.load();assert.equal(pins.length,201);
+        assert.deepEqual(f.rt.world.requests.filter(c=>c.url.pathname.endsWith('/get_personal_mapkit_locations')).map(c=>c.body.page_offset),[0,200]);
+        assert(f.rt.world.requests.every(c=>c.headers.get('Authorization')==='Bearer fake-a'));
+    });
+    await test('Missing native-point backend gives an explicit update message, never a false empty map',async()=>{
+        const f=setup({rows:[],pointReply:()=>response({code:'PGRST202'},404)});
+        assert((await failure(()=>f.load(),f.rt)).includes('pending backend update'));assert.equal(f.rt.world.requests.length,2);
+    });
+    await test('Account switches during native-point reads reject the old result',async()=>{
+        const gate=deferred(),f=setup({rows:[],pointReply:()=>gate.promise}),pending=f.load();
+        await new Promise(r=>setImmediate(r));f.rt.switch('b');gate.resolve(response([selected()]));
+        assert((await failure(()=>pending,f.rt)).includes('account changed'));assert.equal(f.rt.world.requests.length,2);
+    });
+    await test('The same total deadline cancels native-point pagination, without a second timer or retry',async()=>{
+        let timer,timers=0;
+        const f=setup({setTimeout(fn,ms){assert.equal(ms,10000);timer=fn;timers++;return 1;},clearTimeout(){timers--;},pointReply:()=>
+            new Promise((_,reject)=>f.rt.world.requestSignal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}))});
+        const fetch=f.rt.supabase.rest.fetch;f.rt.supabase.rest.fetch=(input,init)=>{f.rt.world.requestSignal=init.signal;return fetch(input,init);};
+        const pending=f.load();await new Promise(r=>setImmediate(r));timer();await failure(()=>pending,f.rt);
+        assert(f.rt.world.requestSignal.aborted);assert.equal(timers,0);assert.equal(f.rt.world.requests.length,2);
+    });
+    await test('Backgrounding removes native pins and blocks late private-point responses',async()=>{
+        const gate=deferred(),f=setup({rows:[],pointReply:()=>gate.promise}),r=screen(f.rt,'dev-map');await r.settle();
+        f.rt.emit('background');await r.settle();gate.resolve(response([selected()]));await r.settle();assert.equal(markers(r).length,0);assert.equal(f.rt.world.lateUpdates,0);r.unmount();
     });
     console.log(`${passed} offline personal-map checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

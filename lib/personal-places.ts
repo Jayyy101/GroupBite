@@ -1,6 +1,7 @@
+import { withRequestDeadline } from "@/lib/request-deadline";
 import { isVisitDate } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
-import type { PersonalPlace, PersonalPlaceFields } from "@/types/database";
+import type { PersonalPlace, PersonalPlaceFields, PersonalPlaceSummary } from "@/types/database";
 
 export class PersonalPlaceError extends Error {
     constructor(public readonly kind: "account" | "changed" | "uncertain" | "invalid", message: string) {
@@ -44,13 +45,38 @@ async function accountToken(userId: string) {
 
 // Pin each request to the initiating account. An account switch must never send
 // another user's draft with the new account's default Authorization header.
-export async function listPersonalPlaces(userId: string): Promise<PersonalPlace[]> {
+export async function listPersonalPlaces(userId: string): Promise<PersonalPlaceSummary[]> {
     const token = await accountToken(userId);
-    const result = await supabase.from("personal_places").select("*").eq("owner_user_id", userId)
+    const result = await withRequestDeadline(signal => supabase.from("personal_places").select("*").eq("owner_user_id", userId)
         .order("created_at", { ascending: false }).order("id")
-        .setHeader("Authorization", `Bearer ${token}`);
+        .setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
     if (result.error) throw result.error;
-    return result.data;
+    if (!result.data.length) return [];
+    const totals = new Map(result.data.map(place => [place.id, { sum: 0, rated: 0, visits: 0 }]));
+    // Bulk owner-scoped reads, not one request per card. Read only rating facts;
+    // keyset paging avoids silently truncating history at the REST row limit.
+    let after: string | undefined;
+    while (true) {
+        const pageToken = await accountToken(userId);
+        const query = supabase.from("personal_visits").select("id,personal_place_id,rating").eq("owner_user_id", userId)
+            .order("id").limit(500).setHeader("Authorization", `Bearer ${pageToken}`);
+        if (after) query.gt("id", after);
+        const page = await withRequestDeadline(signal => query.abortSignal(signal).retry(false));
+        if (page.error) throw page.error;
+        if (!page.data.length) break;
+        for (const visit of page.data) {
+            const total = totals.get(visit.personal_place_id);
+            if (!total) continue;
+            total.visits++;
+            if (visit.rating !== null) { total.rated++; total.sum += visit.rating; }
+        }
+        after = page.data[page.data.length - 1].id;
+    }
+    return result.data.map(place => {
+        const total = totals.get(place.id)!;
+        return { ...place, average_rating: total.rated ? total.sum / total.rated : null,
+            rated_visit_count: total.rated, total_visit_count: total.visits };
+    });
 }
 
 export async function getPersonalPlace(userId: string, id: string): Promise<PersonalPlace | null> {
@@ -61,62 +87,24 @@ export async function getPersonalPlace(userId: string, id: string): Promise<Pers
     return result.data;
 }
 
-export async function reconcilePersonalPlace(userId: string, requestId: string): Promise<PersonalPlace | null> {
-    const token = await accountToken(userId);
-    const result = await supabase.from("personal_places").select("*").eq("owner_user_id", userId)
-        .eq("client_request_id", requestId).setHeader("Authorization", `Bearer ${token}`).maybeSingle();
-    if (result.error) throw result.error;
-    return result.data;
-}
-
-export async function createPersonalPlace(userId: string, fields: PersonalPlaceFields, requestId: string, applePlaceId?: string | null): Promise<PersonalPlace> {
-    const value = normalizePersonalPlace(fields);
-    // Keep the opaque identifier separate from user-entered facts. Match
-    // Migration 13 without altering the ID or assuming an Apple ID format.
-    if (applePlaceId != null && (typeof applePlaceId !== "string" || !applePlaceId
-        || Array.from(applePlaceId).length > 300 || applePlaceId !== applePlaceId.trim()
-        || /[\u0000-\u001f\u007f-\u009f]/.test(applePlaceId))) {
-        throw new PersonalPlaceError("invalid", "Invalid Apple Place ID. Save without it or select the place again.");
-    }
-    const token = await accountToken(userId);
-    // No upsert or automatic mutation retries. A lost response is reconciled by
-    // reading this request ID; a missing result is never automatically recreated.
-    // Omit absent IDs so existing callers also work against pre-Migration 13 schemas.
-    const result = await supabase.from("personal_places").insert({ ...value, client_request_id: requestId,
-        ...(applePlaceId != null ? { apple_place_id: applePlaceId } : {}) })
-        .select("*").setHeader("Authorization", `Bearer ${token}`).retry(false).single();
-    if (!result.error && result.data) return result.data;
-    if (result.error && ["22007", "22008", "23514", "42501"].includes(result.error.code)) {
-        throw new PersonalPlaceError("invalid", "Could not save this place. Check your session and memory fields.");
-    }
-    try {
-        const saved = await reconcilePersonalPlace(userId, requestId);
-        // A duplicate request can already have been edited. Return that record;
-        // never overwrite its current contents with the original submission.
-        if (saved) return saved;
-    } catch (error) {
-        if (error instanceof PersonalPlaceError && error.kind === "account") throw error;
-    }
-    throw new PersonalPlaceError("uncertain", "Could not confirm this save. Check Saved Result or review My Places before starting a new save.");
-}
-
 export async function updatePersonalPlace(userId: string, place: PersonalPlace, fields: PersonalPlaceFields, canSend: () => boolean = () => true): Promise<PersonalPlace> {
     const value = normalizePersonalPlace(fields);
     const token = await accountToken(userId);
     if (!canSend()) throw new PersonalPlaceError("invalid", "Save paused before sending. Return to the form and review it before saving.");
-    const result = await supabase.from("personal_places").update(value).eq("owner_user_id", userId)
-        .eq("id", place.id).eq("revision", place.revision).select("*")
-        .setHeader("Authorization", `Bearer ${token}`).retry(false).maybeSingle();
+    const result = await withRequestDeadline(signal => supabase.rpc("update_personal_place", {
+        target_personal_place_id: place.id, expected_revision: place.revision,
+        restaurant_name: value.name, restaurant_address: value.address, restaurant_cuisine: value.cuisine,
+    }).setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
     if (result.error) throw new PersonalPlaceError("uncertain", "Could not confirm this update. Cancel and refresh the place before editing again.");
-    if (!result.data) throw new PersonalPlaceError("changed", "This place changed or is no longer available. Cancel and refresh before editing again.");
-    return result.data;
+    if (!result.data[0]) throw new PersonalPlaceError("changed", "This place changed or is no longer available. Cancel and refresh before editing again.");
+    return result.data[0];
 }
 
 export async function deletePersonalPlace(userId: string, place: PersonalPlace): Promise<void> {
     const token = await accountToken(userId);
-    const result = await supabase.from("personal_places").delete().eq("owner_user_id", userId)
-        .eq("id", place.id).eq("revision", place.revision).select("id")
-        .setHeader("Authorization", `Bearer ${token}`).retry(false).maybeSingle();
+    const result = await withRequestDeadline(signal => supabase.rpc("delete_personal_place", {
+        target_personal_place_id: place.id, expected_revision: place.revision,
+    }).setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
     if (result.error) throw new PersonalPlaceError("uncertain", "Could not confirm deletion. Refresh the place before confirming again.");
     if (!result.data) throw new PersonalPlaceError("changed", "This place changed or is no longer available. Review the refreshed place before deleting.");
 }
