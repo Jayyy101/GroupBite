@@ -21,9 +21,9 @@ function CircularBack({ onBack, busy = false, compact = false, onLayout }: Pick<
 }) {
     if (compact) return <Pressable accessibilityRole="button" accessibilityLabel="Back"
         accessibilityState={{ disabled: busy }} disabled={busy} onPress={onBack} onLayout={onLayout}
-        style={[styles.backTarget, busy && backendStyles.disabled]}>
-        {({ pressed }) => <View pointerEvents="none" style={[styles.compactBack, pressed && styles.pressed]}>
-            <Ionicons name="chevron-back" size={20} color="#C9472C" allowFontScaling={false}
+        style={styles.backTarget}>
+        {({ pressed }) => <View pointerEvents="none" style={[styles.compactBack, pressed && styles.compactPressed]}>
+            <Ionicons name="chevron-back" size={20} color={busy ? "#79665E" : "#C9472C"} allowFontScaling={false}
                 accessible={false} importantForAccessibility="no" />
         </View>}
     </Pressable>;
@@ -69,20 +69,18 @@ function EdgeToEdgeScaffold({ children, onBack, busy, scrollRef,
     const insets = useSafeAreaInsets();
     const [backHeight, setBackHeight] = useState(BACK_SIZE);
     const backTop = insets.top + 4;
+    const initialContentTop = backTop + backHeight + 8;
     const left = Math.max(24, insets.left), right = Math.max(24, insets.right);
     return <View style={backendStyles.screen}>
-        {/* This touch-through container protects only the circular target. */}
+        {/* Only Back intercepts touches; content scrolls beneath it and the status area. */}
         <View pointerEvents="box-none" style={{ position: "absolute", top: backTop, left, right, zIndex: 2 }}>
             <CircularBack compact onBack={onBack} busy={busy} onLayout={event => {
                 setBackHeight(Math.max(BACK_SIZE, event.nativeEvent.layout.height));
             }} />
         </View>
-        {insets.top > 0 && <View pointerEvents="none" accessible={false} importantForAccessibility="no-hide-descendants"
-            style={{ position: "absolute", top: 0, left: 0, right: 0, height: insets.top,
-                backgroundColor: "#FFF8F0", zIndex: 1 }} />}
         <ScrollView ref={scrollRef} style={styles.viewport}
             contentContainerStyle={[backendStyles.content, contentContainerStyle, {
-                paddingTop: backTop + backHeight + 8,
+                paddingTop: initialContentTop,
                 paddingLeft: left, paddingRight: right,
                 ...(includeBottomInset ? { paddingBottom: 32 + insets.bottom } : {}),
             }]}
@@ -103,8 +101,10 @@ const styles = StyleSheet.create({
         backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center", alignSelf: "flex-start" },
     pressed: { backgroundColor: "#F3E7DC" },
     backTarget: { width: BACK_SIZE, height: BACK_SIZE, alignItems: "center", justifyContent: "center", alignSelf: "flex-start" },
-    compactBack: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: "#BFA99B",
-        backgroundColor: "#FFFFFF", alignItems: "center", justifyContent: "center" },
+    compactBack: { width: 40, height: 40, borderRadius: 20, borderWidth: 1, borderColor: "rgba(191,169,155,0.6)",
+        backgroundColor: "rgba(255,248,240,0.88)", alignItems: "center", justifyContent: "center",
+        shadowColor: "#2D1F1A", shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4 },
+    compactPressed: { backgroundColor: "rgba(243,231,220,0.94)" },
     compactTitle: { color: "#2D1F1A", fontSize: 26, fontWeight: "700", marginBottom: 16 },
     viewport: { flex: 1, overflow: "hidden" },
     content: { paddingTop: 12 },

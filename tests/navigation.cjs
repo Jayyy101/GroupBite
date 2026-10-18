@@ -190,7 +190,7 @@ function tabPress(r, h, name) {
             assert(nodes(row).includes(back), 'Back belongs to the header before the viewport');
             assert(!nodes(scroll).includes(back), 'Back must remain stationary while scrolling');
             if (edgeToEdge) {
-                assert.equal(row.props.pointerEvents, 'box-none', 'Only the Back target intercepts touches');
+                assert.equal(row.props.pointerEvents, 'box-none', 'Only Back intercepts touches; surrounding content remains usable');
                 assert.equal(flatten(row.props.style).position, 'absolute');
                 assert.equal(flatten(row.props.style).top, insets.top + 4, 'Back stays below the actual safe area');
                 assert.equal(flatten(row.props.style).height, undefined, 'No fixed navigation row');
@@ -198,19 +198,14 @@ function tabPress(r, h, name) {
                 assert.equal(flatten(row.props.style).left, content.paddingLeft);
                 assert.equal(flatten(row.props.style).right, content.paddingRight);
                 assert.equal(nodes(r.output).filter(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Back').length, 1);
-                const cap = nodes(r.output).find(n => n.props?.pointerEvents === 'none' && n.props.importantForAccessibility === 'no-hide-descendants');
-                if (insets.top > 0) {
-                    assert(cap); assert.equal(cap.props.accessible, false);
-                    assert.equal(cap.props.importantForAccessibility, 'no-hide-descendants');
-                    const capStyle = flatten(cap.props.style);
-                    assert.equal(capStyle.position, 'absolute'); assert.equal(capStyle.top, 0);
-                    assert.equal(capStyle.left, 0); assert.equal(capStyle.right, 0);
-                    assert(capStyle.zIndex < flatten(row.props.style).zIndex, 'Back remains sharp above the status treatment');
-                    assert.equal(capStyle.height, insets.top, 'Only the actual status safe area is protected');
-                    assert.equal(capStyle.backgroundColor, '#FFF8F0');
-                    assert.equal(cap.props.children, null, 'No fade or added band below the safe area');
-                    assert(!nodes(scroll).includes(cap), 'Status cap never scrolls');
-                } else assert.equal(cap, undefined, 'No artificial status strip when the top inset is zero');
+                const children = r.output.props.children.filter(Boolean);
+                assert.equal(children.length, 2, 'No navigation surface or status-area mask clips scrolling content');
+                assert.equal(children[0], row); assert.equal(children[1], scroll);
+                const rowStyle = flatten(row.props.style);
+                assert.equal(rowStyle.backgroundColor, undefined, 'The floating Back row remains transparent');
+                assert(rowStyle.zIndex > (flatten(scroll.props.style).zIndex ?? 0), 'Back stays above scrolling content');
+                assert.equal(rowStyle.opacity, undefined);
+                assert.equal(row.props.onStartShouldSetResponder, undefined, 'No full-width touch interceptor remains');
             } else {
                 assert.equal(flatten(row.props.style).height, 48);
                 assert.equal(flatten(row.props.style).position, undefined);
@@ -224,7 +219,14 @@ function tabPress(r, h, name) {
                 const circleStyle = flatten(circle.props.style);
                 assert.equal(circleStyle.width, 40); assert.equal(circleStyle.height, 40);
                 assert.equal(circleStyle.borderRadius, 20); assert.equal(circleStyle.borderWidth, 1);
-                assert.equal(circleStyle.backgroundColor, '#FFFFFF');
+                assert.equal(circleStyle.backgroundColor, 'rgba(255,248,240,0.88)', 'Only the cream fill is translucent');
+                assert.equal(circleStyle.borderColor, 'rgba(191,169,155,0.6)');
+                assert.equal(circleStyle.shadowColor, '#2D1F1A');
+                assert.equal(circleStyle.shadowOffset.width, 0); assert.equal(circleStyle.shadowOffset.height, 2);
+                assert.equal(circleStyle.shadowOpacity, 0.15); assert.equal(circleStyle.shadowRadius, 4);
+                assert.equal(circleStyle.overflow, undefined, 'The soft shadow is not clipped by the circle');
+                assert.equal(circleStyle.opacity, undefined);
+                assert.equal(style.opacity, undefined, 'The button and icon stay opaque even while busy');
             } else assert.equal(style.borderRadius, 22);
             assert.equal(back.props.accessibilityRole, 'button'); assert.equal(back.props.accessibilityLabel, 'Back');
             assert.equal(back.props.accessibilityState.disabled, !!back.props.disabled);
@@ -232,6 +234,7 @@ function tabPress(r, h, name) {
             const icon = nodes(back).find(n => n.type === 'Icon');
             assert.equal(icon.props.name, 'chevron-back'); assert.equal(icon.props.size, edgeToEdge ? 20 : 22);
             assert.equal(icon.props.accessible, false);
+            if (edgeToEdge) assert.equal(icon.props.color, back.props.disabled ? '#79665E' : '#C9472C', 'Busy state uses a readable muted icon rather than whole-button opacity');
             if (!edgeToEdge) assert.notEqual(flatten(back.props.style({ pressed: true })).backgroundColor, style.backgroundColor);
         } else {
             assert(!nodes(r.output).some(n => n.type === 'Pressable' && n.props.accessibilityLabel === 'Back'));
@@ -239,7 +242,7 @@ function tabPress(r, h, name) {
         }
         return scroll;
     }
-    await test('Both iOS details show full-width scrolling titles below unchanged Back and status protection in all states', async () => {
+    await test('Both iOS details allow scrolling under stationary Back and the status area without masks in all states', async () => {
         for (const route of ['group/[id]', 'group/[id]/restaurant/[entryId]']) {
             for (const state of ['ready', 'invalid', 'restoring', 'signed-out', 'denied', 'error']) {
                 const rt = runtime({ platform: 'ios', mocks: clipboard, fetch: call => {
@@ -277,8 +280,12 @@ function tabPress(r, h, name) {
             }
         }
         // Non-iOS retains the previous protected-viewport treatment.
-        const rt = runtime(), r = screen(rt, 'group/[id]/restaurant/[entryId]'); await r.settle();
-        assertScaffold(r, rt.world.safeAreaInsets, true); r.unmount();
+        for (const platform of ['android', 'web']) {
+            const rt = runtime({ platform }), r = screen(rt, 'group/[id]/restaurant/[entryId]'); await r.settle();
+            assertScaffold(r, rt.world.safeAreaInsets, true);
+            assert(!nodes(r.output).some(n => n.props?.onStartShouldSetResponder), 'No iOS overlay is added on other platforms');
+            r.unmount();
+        }
     });
     await test('Long titles wrap without a side spacer; measured Back height provides a compact gap without moving Back', async () => {
         for (const route of ['group/[id]', 'group/[id]/restaurant/[entryId]']) {
@@ -293,14 +300,16 @@ function tabPress(r, h, name) {
             const scroll = () => nodes(r.output).find(n => n.type === 'ScrollView');
             const title = () => nodes(scroll()).find(n => n.props?.accessibilityRole === 'header');
             assert.equal(textOf(title()), longName);
-            for (const measuredBack of [44, 52]) {
+            for (const measuredBack of [44, 52, 36]) {
                 button(r, 'Back').props.onLayout({ nativeEvent: { layout: { width: measuredBack, height: measuredBack } } });
                 await r.settle();
                 assert.equal(scroll().props.children[0], title());
                 assert.equal(flatten(r.output.props.children[0].props.style).top, 66, 'Back retains its safe-area position independently of the title');
                 assert.equal(flatten(scroll().props.contentContainerStyle).paddingLeft, 24);
                 assert.equal(flatten(scroll().props.contentContainerStyle).paddingRight, 24);
-                assert.equal(flatten(scroll().props.contentContainerStyle).paddingTop, 66 + measuredBack + 8);
+                const contentTop = 66 + Math.max(44, measuredBack) + 8;
+                assert.equal(flatten(scroll().props.contentContainerStyle).paddingTop, contentTop);
+                assert.equal(r.output.props.children.filter(Boolean).length, 2, 'Measuring Back must not add a top mask');
                 const titleStyle = flatten(title().props.style);
                 assert.equal(titleStyle.fontSize, 26); assert.equal(titleStyle.marginBottom, 16);
                 for (const prop of ['marginLeft', 'marginRight', 'paddingLeft', 'paddingRight', 'width', 'height', 'maxHeight']) assert.equal(titleStyle[prop], undefined);
@@ -311,9 +320,9 @@ function tabPress(r, h, name) {
                 assert.equal(title().props.onTextLayout, undefined);
             }
             rt.world.pressed = true; r.dirty = true; await r.settle();
-            assert.equal(flatten(nodes(button(r, 'Back')).find(n => n.type === 'View').props.style).backgroundColor, '#F3E7DC');
+            assert.equal(flatten(nodes(button(r, 'Back')).find(n => n.type === 'View').props.style).backgroundColor, 'rgba(243,231,220,0.94)');
             rt.world.pressed = false; r.dirty = true; await r.settle();
-            assert.equal(flatten(nodes(button(r, 'Back')).find(n => n.type === 'View').props.style).backgroundColor, '#FFFFFF');
+            assert.equal(flatten(nodes(button(r, 'Back')).find(n => n.type === 'View').props.style).backgroundColor, 'rgba(255,248,240,0.88)');
             r.unmount();
         }
     });
@@ -345,6 +354,8 @@ function tabPress(r, h, name) {
         const saving = button(r, 'Confirm Leave Group').props.onPress(); await r.settle();
         assert.equal(button(r, 'Back').props.disabled, true);
         assert.equal(button(r, 'Back').props.accessibilityState.disabled, true);
+        assertScaffold(r, rt.world.safeAreaInsets, true, true);
+        assert.equal(flatten(button(r, 'Back').props.style).opacity, undefined, 'Busy Back remains legible without whole-button opacity');
         pending.resolve(response({ code: '22023', message: 'Rejected for test' }, 400)); await saving; await r.settle();
         assert.equal(button(r, 'Back').props.disabled, false);
         await click(r, 'Back'); assert.equal(rt.world.navigation.at(-1), '/groups'); r.unmount();
