@@ -178,9 +178,10 @@ function runtime(options = {}) {
     function render(Screen, accountBoundary = true) {
         // Match the account-scoped production lifetime above disposable routes.
         const Provider = load('@/providers/group-creation').GroupCreationProvider;
+        const JoinProvider = load('@/providers/join-request').JoinRequestProvider;
         const AddProvider = load('@/providers/unified-add').UnifiedAddProvider;
-        function Boundary() { return accountBoundary ? jsx(Provider, { children: world.auth.session
-            ? jsx(AddProvider,{userId:world.auth.session.user.id,children:jsx(Screen,{})},world.auth.session.user.id) : jsx(Screen,{}) }, world.auth.session?.user.id) : jsx(Screen, {}); }
+        function Boundary() { return accountBoundary ? jsx(Provider, { children: jsx(JoinProvider, { children: world.auth.session
+            ? jsx(AddProvider,{userId:world.auth.session.user.id,children:jsx(Screen,{})},world.auth.session.user.id) : jsx(Screen,{}) }) }, world.auth.session?.user.id) : jsx(Screen, {}); }
         const frames = new Map();
         const renderer = { dirty: true, output: null, effects: [],
             draw() {

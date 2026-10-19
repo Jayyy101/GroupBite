@@ -54,6 +54,23 @@ function layoutRuntime() {
         rt.switch(null, r); await r.settle(); assert(!textOf(r.output).includes('A-only memory'));
         assert.equal(r.output.type, 'Redirect'); r.unmount();
     });
+    await test('Actual app layout retains Join uncertainty across route remount/token refresh and disposes it per account', async () => {
+        const rt = layoutRuntime(), { useJoinRequest } = rt.load('@/providers/join-request');
+        let join;
+        function Probe() { join = useJoinRequest(); return null; }
+        rt.world.route = Probe;
+        const r = screen(rt, '(app)/_layout'); await r.settle();
+        const attempt = join.begin(); r.dirty = true; await r.settle();
+        join.settle(attempt, true); r.dirty = true; await r.settle(); const uncertain = join.attempt;
+        rt.world.route = () => null; r.dirty = true; await r.settle();
+        rt.world.route = Probe; r.dirty = true; await r.settle(); assert.equal(join.attempt, uncertain);
+        rt.switch('a', r); await r.settle(); assert.equal(join.attempt, uncertain);
+        const old = join; rt.switch('b', r); await r.settle(); assert.equal(join.attempt, null);
+        assert.equal(old.acknowledge(uncertain), false);
+        const next = join.begin(); r.dirty = true; await r.settle(); const oldAccount = join;
+        rt.switch(null, r); await r.settle(); assert.equal(oldAccount.settle(next, true), false);
+        assert.equal(r.output.type, 'Redirect'); assert.equal(rt.world.requests.length, 0); r.unmount();
+    });
     await test('Auth resumes only known internal links, retaining legacy editor and dynamic-route parameters', async () => {
         const rt = runtime(), api = rt.load('@/lib/auth-navigation');
         for (const value of ['https://evil.test', '//evil.test', '/auth', ['/', '/groups'], '/group/a/../auth', '/unknown', '/groups#x']) {
@@ -63,6 +80,10 @@ function layoutRuntime() {
         assert.equal(api.authReturnTo('/add-place', { id: 'legacy' }), '/add-place?id=legacy');
         assert.equal(api.authReturnTo('/group/a/restaurant/b', { id: 'a', entryId: 'b', source: 'link' }), '/group/a/restaurant/b?source=link');
         assert.equal(api.authReturnTo('/add/group/a/restaurant/b', { id: 'a', entryId: 'b' }), '/add/group/a/restaurant/b');
+        assert.equal(api.safeAuthReturnTo('/join-group'), '/join-group');
+        assert.equal(api.authReturnTo('/join-group', {}), '/join-group');
+        assert.equal(api.safeAuthReturnTo('/create-group'), '/create-group');
+        assert.equal(api.authReturnTo('/create-group', {}), '/create-group');
         assert.equal(api.safeAuthReturnTo('/add/personal-place/a'), '/add/personal-place/a');
         assert.equal(api.safeAuthReturnTo('/add/group/a/restaurant/b'), '/add/group/a/restaurant/b');
         assert.equal(api.safeAuthReturnTo('/add/other-route'), '/');

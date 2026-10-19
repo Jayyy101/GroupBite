@@ -17,7 +17,7 @@ async function test(label,fn) { await fn(); checks++; console.log('PASS '+label)
                 if(call.method==='GET') return response([]);
                 assert.equal(call.url.pathname,'/rest/v1/rpc/'+rpc);assert.equal(call.user,'a');return pending.promise;
             }});
-            const r=screen(rt,'groups');await r.settle();await enter(r,input,value);
+            const r=screen(rt,rpc==='create_group'?'create-group':'join-group');await r.settle();await enter(r,input,value);
             const action=handler(r,label), attempt=action();await action();await r.settle();
             assert.equal(rt.world.requests.filter(c=>c.method==='POST').length,1);
             rt.switch('b',r);await r.settle();pending.resolve(response('fixture-result'));await attempt;await r.settle();await action();

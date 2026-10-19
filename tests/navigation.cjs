@@ -14,6 +14,7 @@ const restaurant = { id: entryId, restaurant_id: restaurantId, name: 'Cafe', add
 const defer = () => { let resolve; const promise = new Promise(r => { resolve = r; }); return { promise, resolve }; };
 let passed = 0;
 async function test(label, fn) { await fn(); passed++; console.log('PASS ' + label); }
+const inputValue = (r, label) => nodes(r.output).find(n => n.type === 'TextInput' && n.props.accessibilityLabel === label).props.value;
 function noForms(h) { assert(!h.allNames().some(n => ['add-place'].includes(n))); }
 function backend(call) {
     switch (call.url.pathname) {
@@ -46,7 +47,7 @@ function tabPress(r, h, name) {
             const identity = h.current().params; h.router.back(); assert.equal(h.current().name, root);
             if (path.includes('/restaurant/')) { assert.equal(identity.id, 'a'); assert.equal(identity.entryId, 'b'); }
         }
-        for (const path of ['/personal-place-form', '/add-visit', '/add-place?id=legacy']) {
+        for (const path of ['/create-group', '/join-group', '/personal-place-form', '/add-visit', '/add-place?id=legacy']) {
             assert.equal(history(path).chain()[1].name, path.split('?')[0].slice(1));
         }
         assert(parse('/auth')); // Auth remains outside the gated tree.
@@ -414,120 +415,210 @@ function tabPress(r, h, name) {
             assert.equal(rt.world.localWrites, 0); r.unmount();
         }
     });
-    await test('Inline Create/Join blocks tab blur/reselect, clears only on Discard, and blocks active submissions', async () => {
-        for (const name of ['index', '(groups)']) {
-            const h = history('/groups'), rt = runtime({ fetch: backend, navigation: { getState: h.tabState, dispatch: h.dispatch } });
-            rt.world.tabsScreen = rt.load('app/groups').default;
-            const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
+    // Model route mount/unmount under the real account-scoped provider and use
+    // installed Router actions/reducers for destinations. Native events are synthetic.
+    async function groupsFlow(fetch = backend) {
+        const h = history('/groups'); let r, creation;
+        const update = fn => (...args) => { fn(...args); r.dirty = true; };
+        const rt = runtime({ fetch, platform: 'ios',
+            router: Object.fromEntries(Object.entries(h.router).map(([key, fn]) => [key, key === 'canGoBack' ? fn : update(fn)])),
+            navigation: { getState: h.tabState, dispatch: update(action => {
+                if (action.type === 'GO_BACK') h.router.back(); else h.dispatch(action);
+            }) } });
+        const Groups = rt.load('app/groups').default, Create = rt.load('app/create-group').default, Join = rt.load('app/join-group').default;
+        const Tabs = rt.load('app/(app)/(tabs)/_layout').default;
+        const { useGroupCreation } = rt.load('@/providers/group-creation');
+        rt.world.tabsScreen = Groups;
+        function Route() { creation = useGroupCreation(); return { type: h.current().name === 'create-group' ? Create : h.current().name === 'join-group' ? Join : Tabs, props: {} }; }
+        r = rt.render(Route); await r.settle();
+        return { h, rt, r, creation: () => creation };
+    }
+    await test('Create Group is a parent-stack form; clean Back/Cancel and confirmed saves return to Groups', async () => {
+        for (const exit of ['Back', 'Cancel', 'native', 'save', 'direct']) {
+            const { h, rt, r } = await groupsFlow(call => call.url.pathname.endsWith('/create_group')
+                ? response({ id: groupId, name: 'Dinner', owner_user_id: 'a' }) : backend(call));
+            assert(!nodes(r.output).some(n => n.props?.accessibilityLabel === 'New group name'));
+            await click(r, 'Create a Group');
+            assert.equal(h.chain()[1].name, 'create-group');
+            assert(!nodes(r.output).some(n => n.type === 'Tabs'));
+            const scroll = nodes(r.output).find(n => n.type === 'ScrollView');
+            assert.equal(scroll.props.automaticallyAdjustKeyboardInsets, true);
+            assert.equal(scroll.props.keyboardDismissMode, 'on-drag');
+            assert.equal(flatten(scroll.props.contentContainerStyle).paddingBottom, 32 + rt.world.safeAreaInsets.bottom);
+            assert.equal(flatten(r.output.props.children[0].props.style).position, 'absolute');
+            assert.equal(flatten(nodes(button(r, 'Back')).find(n => n.type === 'View').props.style).backgroundColor, 'rgba(255,248,240,0.88)');
+            if (exit === 'direct') {
+                const direct = history('/create-group');
+                direct.router.dismissTo('/groups', { withAnchor: true });
+                assert.equal(direct.current().name, 'groups');
+                await click(r, 'Cancel');
+            } else if (exit === 'save') {
+                await enter(r, 'New group name', 'Dinner'); const submit = button(r, 'Create Group').props.onPress;
+                await submit(); await submit(); await r.settle();
+            } else if (exit === 'native') {
+                assert.equal(rt.attemptRemoval({ type: 'GO_BACK' }), false); await r.settle();
+            } else await click(r, exit);
+            assert.equal(h.current().name, 'groups'); assert(!nodes(r.output).some(n => n.type === 'Modal'));
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, exit === 'save' ? 1 : 0);
             assert.equal(tabPress(r, h, 'index'), false); h.select('(groups)');
-            await enter(r, 'New group name', 'Unsaved'); assert(tabPress(r, h, name)); await r.settle();
-            assert(textOf(r.output).includes('Discard unsaved changes?'));
-            assert(!textOf(r.output).includes('Review this save before leaving'));
-            assert.equal(h.current().name, 'groups'); await click(r, 'Stay'); assert(textOf(r.output).includes('Groups'));
-            await enter(r, 'Invite code', 'code'); assert(tabPress(r, h, name)); await r.settle(); await click(r, 'Discard');
-            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
-            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'Invite code').props.value, '');
-            h.select('(groups)'); await enter(r, 'New group name', 'Pending');
-            const pending = defer(); rt.supabase.auth.getSession = () => pending.promise;
-            const saving = button(r, 'Create Group').props.onPress(); await r.settle(); assert(tabPress(r, h, 'index')); await r.settle();
-            assert(textOf(r.output).includes('Save in progress')); assert(!nodes(r.output).some(n => n.type === 'Pressable' && textOf(n.props.children) === 'Discard'));
-            await click(r, 'Stay'); pending.resolve({ data: { session: null }, error: null }); await saving; await r.settle();
-            assert.equal(h.current().name, 'groups'); assert.equal(rt.world.requests.filter(c => c.method === 'POST').length, 0); r.unmount();
+            await click(r, 'Dinner Owner'); assert.equal(h.current().params.id, groupId);
+            r.unmount();
         }
     });
-    await test('Uncertain Group creation warns on tab switch/reselect and preserves its recovery lock after returning', async () => {
-        for (const target of ['index', '(groups)']) {
-            const h = history('/groups');
-            const rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
-                ? response({ message: 'Lost creation response' }, 503) : backend(call),
-                navigation: { getState: h.tabState, dispatch: h.dispatch } });
-            const Groups = rt.load('app/groups').default, { useGroupCreation } = rt.load('@/providers/group-creation');
-            let creation;
-            function GroupRoute() { creation = useGroupCreation(); return { type: Groups, props: {} }; }
-            rt.world.tabsScreen = GroupRoute;
-            const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
-            await enter(r, 'New group name', 'Unconfirmed dinner');
+    await test('Create Group unsent names exit immediately with Back/Cancel/native removal and are discarded on remount', async () => {
+        for (const exit of ['Back', 'Cancel', 'native']) {
+            const { h, rt, r } = await groupsFlow(); await click(r, 'Create a Group');
+            await enter(r, 'New group name', 'Unsaved');
+            const staleSubmit = button(r, 'Create Group').props.onPress, staleCancel = button(r, 'Cancel').props.onPress;
+            if (exit === 'native') { assert.equal(rt.attemptRemoval({ type: 'GO_BACK' }), false); await r.settle(); }
+            else await click(r, exit);
+            assert.equal(h.current().name, 'groups'); assert(!nodes(r.output).some(n => n.type === 'Modal'));
+            await click(r, 'Create a Group');
+            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
+            await staleSubmit(); await staleCancel(); await r.settle(); assert.equal(h.current().name, 'create-group');
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0); r.unmount();
+        }
+    });
+    await test('Create Group blocks busy exits and duplicate taps, including token preflight and native removal', async () => {
+        for (const phase of ['preflight', 'rpc']) {
+            const task = defer(); const { h, rt, r } = await groupsFlow(call => call.url.pathname.endsWith('/create_group') ? task.promise : backend(call));
+            await click(r, 'Create a Group'); await enter(r, 'New group name', 'Pending');
+            const original = rt.supabase.auth.getSession;
+            if (phase === 'preflight') rt.supabase.auth.getSession = () => task.promise;
+            const submit = button(r, 'Create Group').props.onPress, pending = submit(); await r.settle(); await submit();
+            assert(button(r, 'Back').props.disabled); assert(button(r, 'Cancel').props.disabled);
+            assert(rt.attemptRemoval({ type: 'GO_BACK' })); await r.settle();
+            assert(textOf(r.output).includes('Save in progress')); assert(!nodes(r.output).some(n => n.type === 'Pressable' && textOf(n.props.children) === 'Discard'));
+            await click(r, 'Stay');
+            task.resolve(phase === 'preflight' ? { data: { session: null }, error: null } : response({ code: '22023', message: 'Rejected' }, 400));
+            await pending; await r.settle(); rt.supabase.auth.getSession = original;
+            assert.equal(h.current().name, 'create-group');
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, phase === 'rpc' ? 1 : 0); r.unmount();
+        }
+    });
+    await test('Join is a parent-stack form; clean/unsent codes exit immediately and are discarded on remount', async () => {
+        for (const hasDraft of [false, true]) for (const exit of ['Back', 'Cancel', 'native']) {
+            const { h, rt, r } = await groupsFlow();
+            assert(!nodes(r.output).some(n => n.type === 'TextInput'));
+            await click(r, 'Join a Group'); assert.equal(h.chain()[1].name, 'join-group');
+            assert(!nodes(r.output).some(n => n.type === 'Tabs'));
+            const scroll = nodes(r.output).find(n => n.type === 'ScrollView');
+            assert.equal(scroll.props.automaticallyAdjustKeyboardInsets, true);
+            assert.equal(scroll.props.keyboardDismissMode, 'on-drag');
+            assert.equal(flatten(scroll.props.contentContainerStyle).paddingBottom, 32 + rt.world.safeAreaInsets.bottom);
+            assert.equal(flatten(r.output.props.children[0].props.style).position, 'absolute');
+            if (hasDraft) await enter(r, 'Invite code', 'Unsaved');
+            const staleSubmit = button(r, 'Request Access').props.onPress, staleCancel = button(r, 'Cancel').props.onPress;
+            if (exit === 'native') { assert.equal(rt.attemptRemoval({ type: 'GO_BACK' }), false); await r.settle(); }
+            else await click(r, exit);
+            assert.equal(h.current().name, 'groups'); assert(!nodes(r.output).some(n => n.type === 'Modal'));
+            await click(r, 'Join a Group'); assert.equal(inputValue(r, 'Invite code'), '');
+            await staleSubmit(); await staleCancel(); await r.settle(); assert.equal(h.current().name, 'join-group');
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0); r.unmount();
+        }
+        const direct = history('/join-group'); direct.router.dismissTo('/groups', { withAnchor: true });
+        assert.equal(direct.current().name, 'groups');
+    });
+    await test('Join blocks duplicate requests and busy exits during token preflight and submission', async () => {
+        for (const phase of ['preflight', 'rpc']) {
+            const task = defer(); const { h, rt, r } = await groupsFlow(call => call.url.pathname.endsWith('/request_group_access') ? task.promise : backend(call));
+            await click(r, 'Join a Group'); await enter(r, 'Invite code', 'Pending');
+            const original = rt.supabase.auth.getSession;
+            if (phase === 'preflight') rt.supabase.auth.getSession = () => task.promise;
+            const submit = button(r, 'Request Access').props.onPress, pending = submit(); await r.settle(); await submit();
+            assert(button(r, 'Back').props.disabled); assert(button(r, 'Cancel').props.disabled);
+            assert(rt.attemptRemoval({ type: 'GO_BACK' })); await r.settle();
+            assert(textOf(r.output).includes('Save in progress')); assert(!nodes(r.output).some(n => n.type === 'Pressable' && textOf(n.props.children) === 'Discard'));
+            await click(r, 'Stay');
+            task.resolve(phase === 'preflight' ? { data: { session: null }, error: null } : response(null));
+            await pending; await r.settle(); rt.supabase.auth.getSession = original;
+            assert.equal(h.current().name, 'join-group');
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, phase === 'rpc' ? 1 : 0);
+            if (phase === 'rpc') { assert(textOf(r.output).includes('Owner must approve')); await click(r, 'Return to Groups'); assert.equal(h.current().name, 'groups'); }
+            r.unmount();
+        }
+    });
+    await test('Uncertain creation exits retain identity on Groups and rearm tab switch/reselect warnings', async () => {
+        for (const exit of ['Back', 'Cancel', 'native', 'Review Groups After Creation']) for (const target of ['index', '(groups)']) {
+            const { h, rt, r, creation } = await groupsFlow(call => call.url.pathname.endsWith('/create_group')
+                ? response({ message: 'Lost creation response' }, 503) : backend(call));
+            await click(r, 'Create a Group'); await enter(r, 'New group name', 'Unconfirmed dinner');
             const staleCreate = button(r, 'Create Group').props.onPress;
-            await click(r, 'Create Group');
-            const attempt = creation.attempt;
+            await click(r, 'Create Group'); const attempt = creation().attempt;
             assert.equal(attempt.status, 'uncertain');
-            assert(tabPress(r, h, target)); await r.settle();
-            assert(textOf(r.output).includes('Review this save before leaving'));
+            async function leave() {
+                if (exit === 'native') { assert(rt.attemptRemoval({ type: 'GO_BACK' })); await r.settle(); }
+                else await click(r, exit);
+            }
+            await leave(); assert(textOf(r.output).includes('Review this save before leaving'));
             assert(textOf(r.output).includes('Leaving does not cancel the request or unlock another creation.'));
             assert(!textOf(r.output).includes('Discard unsaved changes?'));
-            await click(r, 'Stay'); assert.equal(h.current().name, 'groups');
-            assert.equal(creation.attempt, attempt);
-            assert(tabPress(r, h, target)); await r.settle(); await click(r, 'Leave Anyway');
-            assert.equal(h.chain()[2].name, target);
-            assert.equal(creation.attempt, attempt);
-            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
-            // Switching tabs blurs Groups; reselecting its root does not.
-            if (target === 'index') {
-                rt.world.focused = false; r.dirty = true; await r.settle(); h.select('(groups)');
-                rt.world.focused = true; r.dirty = true; await r.settle();
+            await click(r, 'Stay'); assert.equal(creation().attempt, attempt);
+            await leave(); await click(r, 'Leave Anyway'); assert.equal(h.current().name, 'groups');
+            assert.equal(creation().attempt, attempt); assert(textOf(r.output).includes('is unconfirmed.'));
+            // Repeated root reselect does not blur Groups; its guard must still rearm.
+            for (let i = 0; i < 2; i++) {
+                assert(tabPress(r, h, target)); await r.settle(); assert(textOf(r.output).includes('Review this save before leaving'));
+                await click(r, 'Leave Anyway'); assert.equal(creation().attempt, attempt);
+                if (target === 'index') { rt.world.focused = false; r.dirty = true; await r.settle(); h.select('(groups)'); rt.world.focused = true; r.dirty = true; await r.settle(); }
             }
-            assert(button(r, 'Create Group').props.disabled);
-            assert(textOf(r.output).includes('Unconfirmed dinner'));
-            assert(textOf(r.output).includes('is unconfirmed.'));
-            await staleCreate();
-            assert(tabPress(r, h, 'index')); await r.settle();
-            assert(textOf(r.output).includes('Review this save before leaving'), 'Empty fields must not bypass uncertain recovery');
-            await click(r, 'Stay');
-            assert.equal(creation.attempt, attempt);
-            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1);
-            r.unmount();
+            await click(r, 'Create a Group'); await click(r, 'Leave Anyway');
+            assert.equal(h.current().name, 'create-group'); assert(button(r, 'Create Group').props.disabled);
+            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
+            await staleCreate(); await r.settle(); assert.equal(creation().attempt, attempt);
+            await click(r, 'Back'); await click(r, 'Leave Anyway');
+            await click(r, 'Review Groups After Creation'); assert(button(r, 'Start a Separate Group'));
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1); r.unmount();
         }
     });
-    await test('Uncertain Group creation guards native removal and local exits without discarding provider recovery', async () => {
+    await test('Groups pending creation remains discoverable and recovery keeps native/local exit protection', async () => {
         for (const exit of ['native', 'local']) {
-            const rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
-                ? response({ message: 'Lost creation response' }, 503) : backend(call) });
-            const Groups = rt.load('app/groups').default, { useGroupCreation } = rt.load('@/providers/group-creation');
-            let creation, showGroups = true;
-            function Route() { creation = useGroupCreation(); return showGroups ? { type: Groups, props: {} } : null; }
-            const r = rt.render(Route); await r.settle();
-            await enter(r, 'New group name', 'Unconfirmed dinner'); await click(r, 'Create Group');
-            const attempt = creation.attempt, action = { type: 'POP', payload: { count: 1 } };
-            async function leave() {
-                if (exit === 'native') { assert(rt.attemptRemoval(action)); await r.settle(); }
-                else await click(r, 'Add Restaurant / Visit');
-            }
-            await leave(); assert(textOf(r.output).includes('Review this save before leaving'));
-            assert(!textOf(r.output).includes('Discard unsaved changes?'));
-            assert.equal(rt.world.navigation.length, 0);
-            await click(r, 'Stay'); assert.equal(creation.attempt, attempt);
-            await leave(); await click(r, 'Leave Anyway');
-            assert.equal(rt.world.navigation.length, 1);
-            assert.equal(rt.world.navigation[0], exit === 'native' ? action : '/add');
-            assert.equal(creation.attempt, attempt);
-            // Remount only the route, retaining the account-scoped provider.
-            showGroups = false; r.dirty = true; await r.settle();
-            showGroups = true; r.dirty = true; await r.settle();
-            assert.equal(creation.attempt, attempt);
-            assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
-            assert(button(r, 'Create Group').props.disabled);
-            await leave(); assert(textOf(r.output).includes('Review this save before leaving'));
-            await click(r, 'Stay'); await click(r, 'Review Groups After Creation');
-            assert(button(r, 'Start a Separate Group'));
-            assert.equal(creation.attempt, attempt);
-            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1);
-            r.unmount();
+            const { rt, r, creation } = await groupsFlow();
+            const pending = creation().begin('Pending dinner'); r.dirty = true; await r.settle();
+            assert(textOf(r.output).includes('is in progress')); assert(button(r, 'Create a Group').props.disabled);
+            creation().settle(pending, true); r.dirty = true; await r.settle(); const attempt = creation().attempt;
+            if (exit === 'native') { assert(rt.attemptRemoval({ type: 'POP', payload: { count: 1 } })); await r.settle(); }
+            else await click(r, 'Dinner Owner');
+            assert(textOf(r.output).includes('Review this save before leaving')); await click(r, 'Stay');
+            assert.equal(creation().attempt, attempt); assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0); r.unmount();
         }
     });
-    await test('Confirmed Group creation keeps ordinary browsing and detail navigation without an uncertainty warning', async () => {
-        const h = history('/groups'), rt = runtime({ fetch: call => call.url.pathname.endsWith('/create_group')
-            ? response({ id: groupId, name: 'Dinner', owner_user_id: 'a' }) : backend(call), router: h.router,
-            navigation: { getState: h.tabState, dispatch: h.dispatch } });
-        rt.world.tabsScreen = rt.load('app/groups').default;
-        const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
-        await enter(r, 'New group name', 'Dinner'); await click(r, 'Create Group');
-        assert.equal(h.current().name, 'groups'); assert(!button(r, 'Create Group').props.disabled);
-        assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'New group name').props.value, '');
-        assert.equal(tabPress(r, h, 'index'), false); h.select('(groups)');
-        await click(r, 'Dinner Owner');
-        assert.equal(h.current().name, 'group/[id]'); assert.equal(h.current().params.id, groupId);
-        assert(!nodes(r.output).some(n => n.type === 'Modal'));
+    await test('Unlocking creation sends nothing and leaves the dedicated creation action available', async () => {
+        const { h, rt, r, creation } = await groupsFlow(call => call.url.pathname.endsWith('/create_group')
+            ? response({ message: 'Lost' }, 503) : backend(call));
+        await click(r, 'Create a Group'); await enter(r, 'New group name', 'Dinner'); await click(r, 'Create Group');
+        await click(r, 'Cancel'); await click(r, 'Leave Anyway');
+        await click(r, 'Review Groups After Creation');
+        await click(r, 'Start a Separate Group'); await click(r, 'I Understand — Unlock Creation');
+        assert.equal(creation().attempt, null); assert.equal(h.current().name, 'groups');
+        await click(r, 'Create a Group'); assert.equal(h.current().name, 'create-group');
+        assert(!button(r, 'Create Group').props.disabled);
         assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 1); r.unmount();
+    });
+    await test('Groups home orders its count/cards/actions, preserves roles, and refreshes/retries without an Add CTA', async () => {
+        let rows = [{ id: groupId, name: 'Dinner', owner_user_id: 'a' }, { id: otherGroupId, name: 'Lunch', owner_user_id: 'b' }], failed = false;
+        const { rt, r } = await groupsFlow(call => call.url.pathname === '/rest/v1/groups'
+            ? failed ? response({ message: 'Read failed' }, 400) : response(rows) : backend(call));
+        const text = textOf(r.output);
+        const labels = ['Groups', 'Your shared restaurant memories, all in one place.', 'Your Groups (2)', 'Dinner Owner', 'Lunch Member', 'Create a Group', 'Join a Group'];
+        for (let i = 1; i < labels.length; i++) assert(text.indexOf(labels[i]) > text.indexOf(labels[i - 1]));
+        assert(!text.includes('Add Restaurant / Visit')); assert(!text.includes('Your join requests'));
+        assert(!nodes(r.output).some(n => n.type === 'TextInput'));
+        const refresh = button(r, 'Refresh Groups'); assert.equal(refresh.props.accessibilityRole, 'button');
+        assert(flatten(refresh.props.style).minWidth >= 44); assert(flatten(refresh.props.style).minHeight >= 44);
+        assert(button(r, 'Dinner Owner')); assert(button(r, 'Lunch Member'));
+        assert.equal(flatten(button(r, 'Create a Group').props.style).backgroundColor, '#C9472C');
+        assert.equal(flatten(button(r, 'Join a Group').props.style).borderColor, '#E85D3F');
+        failed = true; await click(r, 'Refresh Groups'); assert(textOf(r.output).includes('Could not load your groups.'));
+        assert(!textOf(r.output).includes('Your Groups (0)')); assert(!textOf(r.output).includes('Dinner'));
+        failed = false; rows = []; await click(r, 'Refresh Groups');
+        assert(textOf(r.output).includes('Your Groups (0)')); assert(textOf(r.output).includes('No groups yet.'));
+        rows = [{ id: groupId, name: 'Dinner', owner_user_id: 'a' }]; rt.poll(); await r.settle();
+        assert(textOf(r.output).includes('Your Groups (1)'));
+        rt.emit('inactive'); await r.settle(); assert(!textOf(r.output).includes('Dinner'));
+        rt.emit('active'); await r.settle(); assert(button(r, 'Dinner Owner'));
+        assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0);
+        assert(rt.world.requests.every(c => c.url.pathname === '/rest/v1/groups')); r.unmount();
     });
     await test('Inline Visit Discard never saves/deletes; uncertain results lock retries and reconcile read-only', async () => {
         for (const action of ['edit', 'delete']) {
@@ -565,15 +656,18 @@ function tabPress(r, h, name) {
             assert.equal(rt.world.requests.filter(c => /(?:update|delete)_group_visit$/.test(c.url.pathname)).length, 1); edit.unmount();
         }
     });
-    await test('Inline Group local exits confirm, and shared stale Discard cannot navigate a replacement account', async () => {
-        const rt = runtime({ fetch: backend }), r = screen(rt, 'groups'); await r.settle();
-        await enter(r, 'Invite code', 'Unsaved invite'); await click(r, 'Add Restaurant / Visit');
-        assert.equal(rt.world.navigation.length, 0); await click(r, 'Stay');
-        await click(r, 'Add Restaurant / Visit'); const staleDiscard = button(r, 'Discard').props.onPress;
-        rt.switch('b', r); await r.settle(); await staleDiscard();
-        assert.equal(rt.world.navigation.length, 0); assert.equal(rt.world.lateUpdates, 0);
-        assert.equal(nodes(r.output).find(n => n.props?.accessibilityLabel === 'Invite code').props.value, '');
-        assert(!nodes(r.output).some(n => n.type === 'Modal')); r.unmount();
+    await test('Stale one-field exit/submit callbacks cannot affect a replacement account', async () => {
+        for (const route of ['create-group', 'join-group']) {
+            const rt = runtime({ fetch: backend }), r = screen(rt, route); await r.settle();
+            const label = route === 'create-group' ? 'New group name' : 'Invite code';
+            await enter(r, label, 'Unsent draft');
+            const staleBack = button(r, 'Back').props.onPress, staleCancel = button(r, 'Cancel').props.onPress;
+            const staleSubmit = button(r, route === 'create-group' ? 'Create Group' : 'Request Access').props.onPress;
+            rt.switch('b', r); await r.settle(); await staleBack(); await staleCancel(); await staleSubmit(); await r.settle();
+            assert.equal(rt.world.navigation.length, 0); assert.equal(rt.world.lateUpdates, 0);
+            assert.equal(inputValue(r, label), ''); assert(!nodes(r.output).some(n => n.type === 'Modal'));
+            assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, 0); r.unmount();
+        }
     });
     await test('Full-screen archive edit keeps storage-only behavior and returns to Account detail', async () => {
         const h = history('/place/legacy'), rt = runtime({ router: h.router }); rt.world.params = { id: 'legacy' };

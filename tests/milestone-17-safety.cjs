@@ -48,16 +48,27 @@ async function personalSetup() {
 }
 async function groupSetup(result, options = {}) {
     const state = { rows: [], failure: false, result };
-    const rt = runtime({ ...options, fetch: call => {
+    let rt, r;
+    const go = route => { rt.world.groupRoute = route; r.dirty = true; };
+    rt = runtime({ ...options, router: {
+        push: path => go(path === '/create-group' ? 'create' : 'groups'),
+        dismissTo: () => go('groups'),
+    }, fetch: call => {
         if (call.url.pathname === '/rest/v1/groups') return state.failure ? response({ message: 'offline' }, 400) : response(state.rows);
         if (call.url.pathname === '/rest/v1/join_requests') return response([]);
         if (call.url.pathname.endsWith('/create_group')) return state.result(call, state);
         assert.fail('Unexpected request ' + call.url.pathname);
     } });
-    const Groups = rt.load('app/groups').default;
-    rt.world.showGroups = true;
-    function Route() { return rt.world.showGroups ? { type: Groups, props: {} } : null; }
-    const r = rt.render(Route); await r.settle(); return { rt, r, state };
+    const Groups = rt.load('app/groups').default, Create = rt.load('app/create-group').default;
+    const { useGroupCreation } = rt.load('@/providers/group-creation');
+    rt.world.showGroups = true; rt.world.groupRoute = 'create';
+    let creation;
+    function Route() { creation = useGroupCreation(); return rt.world.showGroups ? { type: rt.world.groupRoute === 'create' ? Create : Groups, props: {} } : null; }
+    r = rt.render(Route); await r.settle(); return { rt, r, state, creation: () => creation };
+}
+async function reviewCreation(f) {
+    await click(f.r, 'Review Groups After Creation'); await click(f.r, 'Leave Anyway');
+    await click(f.r, 'Review Groups After Creation');
 }
 
 function deadlines() {
@@ -251,10 +262,11 @@ function deadlines() {
     });
     await test('Group review failure or an empty successful list never silently unlocks creation; acknowledgement sends nothing', async () => {
         const f = await groupSetup(() => response({ message: 'Unknown result' }, 503)); await enter(f.r, 'New group name', 'Dinner'); await click(f.r, 'Create Group');
-        f.state.failure = true; await click(f.r, 'Review Groups After Creation'); assert(!textOf(f.r.output).includes('Start a Separate Group'));
-        f.state.failure = false; await click(f.r, 'Review Groups After Creation'); assert(button(f.r, 'Create Group').props.disabled);
+        f.state.failure = true; await reviewCreation(f); assert(!textOf(f.r.output).includes('Start a Separate Group'));
+        f.state.failure = false; await click(f.r, 'Review Groups After Creation'); assert.equal(f.creation().attempt.status, 'uncertain');
         await click(f.r, 'Start a Separate Group'); assert(textOf(f.r.output).includes('cannot prove')); await click(f.r, 'Keep Creation Locked');
-        assert(button(f.r, 'Create Group').props.disabled); await click(f.r, 'Start a Separate Group'); await click(f.r, 'I Understand — Start a New Group');
+        assert.equal(f.creation().attempt.status, 'uncertain'); await click(f.r, 'Start a Separate Group'); await click(f.r, 'I Understand — Unlock Creation');
+        await click(f.r, 'Create a Group');
         assert.equal(creations(f.rt).length, 1); assert(!button(f.r, 'Create Group').props.disabled);
         f.state.result = (call, state) => { const row = { id: groupId, owner_user_id: 'a', name: call.body.group_name }; state.rows.push(row); return response(row); };
         await enter(f.r, 'New group name', 'Intentional new group'); await click(f.r, 'Create Group'); assert.equal(creations(f.rt).length, 2); f.r.unmount();
@@ -268,9 +280,9 @@ function deadlines() {
     });
     await test('Retained Group acknowledgement cannot clear another account or a later uncertain attempt', async () => {
         const f = await groupSetup(() => response({ message: 'Lost' }, 503));
-        await enter(f.r, 'New group name', 'First'); await click(f.r, 'Create Group'); await click(f.r, 'Review Groups After Creation'); await click(f.r, 'Start a Separate Group');
-        const stale = button(f.r, 'I Understand — Start a New Group').props.onPress;
-        await click(f.r, 'I Understand — Start a New Group'); await enter(f.r, 'New group name', 'Second'); await click(f.r, 'Create Group');
+        await enter(f.r, 'New group name', 'First'); await click(f.r, 'Create Group'); await reviewCreation(f); await click(f.r, 'Start a Separate Group');
+        const stale = button(f.r, 'I Understand — Unlock Creation').props.onPress;
+        await click(f.r, 'I Understand — Unlock Creation'); await click(f.r, 'Create a Group'); await enter(f.r, 'New group name', 'Second'); await click(f.r, 'Create Group');
         await stale(); await f.r.settle(); assert(button(f.r, 'Create Group').props.disabled); assert(textOf(f.r.output).includes('Second'));
         f.rt.switch('b', f.r); await f.r.settle(); await stale(); await f.r.settle();
         assert.equal(f.rt.world.lateUpdates, 0); assert(!textOf(f.r.output).includes('Second')); f.r.unmount();
@@ -281,12 +293,43 @@ function deadlines() {
         f.state.result = () => response(null); await enter(f.r, 'New group name', 'Corrected'); await click(f.r, 'Create Group');
         assert(button(f.r, 'Create Group').props.disabled); assert.equal(creations(f.rt).length, 2); f.r.unmount();
     });
-    await test('Account replacement disposes the Group creation lock and ignores old pending results and handlers', async () => {
-        const task = defer(), f = await groupSetup(() => task.promise); await enter(f.r, 'New group name', 'A group');
-        const stale = button(f.r, 'Create Group').props.onPress, pending = stale(); await f.r.settle(); assert(button(f.r, 'Creating...').props.disabled);
-        f.rt.switch('b', f.r); await f.r.settle(); task.resolve(response({ message: 'Lost' }, 503)); await pending; await f.r.settle(); await stale();
-        assert(!button(f.r, 'Create Group').props.disabled); assert(!textOf(f.r.output).includes('A group')); assert.equal(creations(f.rt).length, 1);
-        assert.equal(f.rt.world.lateUpdates, 0); f.r.unmount();
+    await test('Account replacement/sign-out disposes creation state and ignores old success, uncertainty and handlers', async () => {
+        for (const user of ['b', null]) for (const success of [true, false]) {
+            const task = defer(), f = await groupSetup(() => task.promise); await enter(f.r, 'New group name', 'A group');
+            const stale = button(f.r, 'Create Group').props.onPress, pending = stale(); await f.r.settle(); assert(button(f.r, 'Creating...').props.disabled);
+            f.rt.switch(user, f.r); await f.r.settle();
+            task.resolve(success ? response({ id: groupId, name: 'A group', owner_user_id: 'a' }) : response({ message: 'Lost' }, 503));
+            await pending; await f.r.settle(); await stale();
+            assert(!textOf(f.r.output).includes('A group')); assert.equal(creations(f.rt).length, 1);
+            assert.equal(f.creation().attempt, null); assert.equal(f.rt.world.groupRoute, 'create');
+            if (user) assert(!button(f.r, 'Create Group').props.disabled);
+            assert.equal(f.rt.world.lateUpdates, 0); f.r.unmount();
+        }
+    });
+    await test('Creation preflight interrupted by backgrounding sends nothing and its unsent name can exit immediately', async () => {
+        const f = await groupSetup(() => assert.fail('Interrupted preflight must not create'));
+        await enter(f.r, 'New group name', 'Retained name');
+        const task = defer(), original = f.rt.supabase.auth.getSession;
+        f.rt.supabase.auth.getSession = () => task.promise;
+        const pending = button(f.r, 'Create Group').props.onPress(); await f.r.settle();
+        f.rt.emit('inactive'); f.rt.emit('active'); await f.r.settle();
+        task.resolve(await original()); await pending; await f.r.settle();
+        assert.equal(creations(f.rt).length, 0); assert.equal(f.creation().attempt, null);
+        assert.equal(input(f.r, 'New group name').props.value, 'Retained name');
+        await click(f.r, 'Cancel'); assert.equal(f.rt.world.groupRoute, 'groups');
+        assert(!nodes(f.r.output).some(n => n.type === 'Modal')); f.r.unmount();
+    });
+    await test('A creation confirmed while away stays on its form, cannot resend and returns to Groups explicitly', async () => {
+        const task = defer(), f = await groupSetup(() => task.promise);
+        await enter(f.r, 'New group name', 'Dinner');
+        const submit = button(f.r, 'Create Group').props.onPress, pending = submit(); await f.r.settle();
+        await pause(f.rt, f.r);
+        task.resolve(response({ id: groupId, name: 'Dinner', owner_user_id: 'a' })); await pending; await f.r.settle();
+        assert.equal(f.rt.world.groupRoute, 'create'); assert.equal(f.creation().attempt, null);
+        await resume(f.rt, f.r); assert(textOf(f.r.output).includes('Group created.'));
+        assert(button(f.r, 'Create Group').props.disabled); await submit();
+        assert.equal(creations(f.rt).length, 1); await click(f.r, 'View Groups');
+        assert.equal(f.rt.world.groupRoute, 'groups'); f.r.unmount();
     });
     console.log(`${passed} Milestone 17 safety regression checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
