@@ -301,13 +301,32 @@ async function uncertain(f, result = () => response({ message: 'Response lost' }
                 if (path === '/rest/v1/group_memberships') return response(role === 'revoked' ? null : { membership_id: 'current-membership' });
                 if (path === '/rest/v1/group_invites') { assert.equal(role, 'owner'); return response(null); }
                 if (path.endsWith('/get_pending_join_requests')) { assert.equal(role, 'owner'); return response(decided ? [] : [{ id: 'join-request', display_name: 'Requesting Friend', requested_at: '2026-10-18' }]); }
-                if (path.endsWith('/get_group_membership_targets')) { assert.equal(role, 'owner'); return response([]); }
+                if (path.endsWith('/get_group_membership_targets')) { assert.equal(role, 'owner'); return response([{ user_id: 'b', membership_id: 'target-membership', display_name: 'Friend', is_owner: false }]); }
                 if (path.endsWith('/decide_join_request')) {
                     assert.equal(role, 'owner'); assert.equal(call.user, 'a'); assert.deepEqual(call.body, { target_request_id: 'join-request', decision }); decided = true; return response(null);
                 }
-                assert(['/rest/v1/rpc/get_group_members', '/rest/v1/rpc/get_group_restaurants'].includes(path), path); return response([]);
+                if (path.endsWith('/get_group_members')) return response([
+                    { user_id: role === 'owner' ? 'a' : 'b', display_name: 'Owner', is_owner: true },
+                    { user_id: role === 'owner' ? 'b' : 'a', display_name: 'Friend', is_owner: false },
+                ]);
+                assert.equal(path, '/rest/v1/rpc/get_group_restaurants'); return response([]);
             } });
             rt.world.params = { id: groupId }; const r = screen(rt, 'group/[id]'); await r.settle();
+            assert(!textOf(r.output).includes('Add Restaurant / Visit'));
+            assert(!textOf(r.output).includes('Add your first visit above!'));
+            if (role !== 'revoked') {
+                assert(textOf(r.output).includes('No restaurants yet. Tap the Add tab at the bottom to save a visit.'));
+                assert(textOf(r.output).includes(role === 'owner' ? 'You are the Owner.' : 'You are a Member.'));
+                assert.equal(button(r, 'Leave Group').props.disabled, role === 'owner');
+                assert(!button(r, 'Refresh Group').props.disabled);
+                if (role === 'owner') {
+                    for (const label of ['Generate / Reset Invite Code', 'Remove Friend from group', 'Transfer ownership to Friend', 'Approve Requesting Friend', 'Deny Requesting Friend']) assert(!button(r, label).props.disabled);
+                    assert(button(r, 'Revoke Invite').props.disabled); // No active invite in this fixture.
+                } else {
+                    assert(!textOf(r.output).includes('Generate / Reset Invite Code'));
+                    assert(!textOf(r.output).includes('Remove Member')); assert(!textOf(r.output).includes('Transfer Ownership'));
+                }
+            } else assert(!textOf(r.output).includes('No restaurants yet.'));
             if (role === 'owner') { await click(r, decision === 'approved' ? 'Approve Requesting Friend' : 'Deny Requesting Friend'); assert.equal(writes(rt).filter(c => c.url.pathname.endsWith('/decide_join_request')).length, 1); }
             else { assert(!textOf(r.output).includes('Requesting Friend')); assert(!textOf(r.output).includes('Pending join requests')); assert.equal(writes(rt).filter(c => c.url.pathname.endsWith('/decide_join_request')).length, 0); }
             r.unmount();

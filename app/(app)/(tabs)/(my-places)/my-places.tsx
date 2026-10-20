@@ -34,10 +34,7 @@ function MyPlaces({ userId }: { userId: string }) {
             {__DEV__ && Platform.OS === "ios" && <Pressable accessibilityRole="button" onPress={() => router.push("/dev-map")} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>View My Places on Map</Text>
             </Pressable>}
-            <Pressable accessibilityRole="button" onPress={() => router.push("/add")} style={styles.primaryButton}>
-                <Text style={styles.primaryText}>Add a Restaurant</Text>
-            </Pressable>
-            {loading ? <Text style={styles.message}>Loading My Places...</Text> : error !== "" ? <Text style={styles.error}>{error}</Text> : places.length === 0 ? <Text style={styles.message}>No personal Places yet. Save a place without joining a group.</Text> : places.map(place => (
+            {loading ? <Text style={styles.message}>Loading My Places...</Text> : error !== "" ? <Text style={styles.error}>{error}</Text> : places.length === 0 ? <Text style={styles.message}>No personal places yet. Tap the Add tab at the bottom to save your first visit.</Text> : places.map(place => (
                 <Pressable key={place.id} accessibilityRole="button" onPress={() => router.push({ pathname: "/personal-place/[id]", params: { id: place.id } }, { withAnchor: true })} style={styles.card}>
                     <View style={styles.cardBody}>
                         <View style={styles.cardHeading}>

@@ -2,10 +2,12 @@ import { AddResults, PreviousAddResults } from "@/components/add-results";
 import { PersonalAccess } from "@/components/personal-access";
 import { RestaurantSearch } from "@/components/restaurant-search";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import Ionicons from "@expo/vector-icons/Ionicons";
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
 import { useLeaveGuard } from "@/hooks/use-leave-guard";
 import { accountAccessToken } from "@/lib/account-session";
 import { recentRestaurantChoices } from "@/lib/recent-restaurants";
+import { traceSearch } from "@/lib/search-diagnostics";
 import { destinationHref } from "@/lib/restaurant-navigation";
 import { isConfirmedAdd } from "@/lib/unified-add";
 import { withRequestDeadline } from "@/lib/request-deadline";
@@ -17,7 +19,7 @@ import type { AddRestaurant } from "@/types/database";
 import { useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { AppState, Pressable, Text } from "react-native";
+import { AppState, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 
 export default function AddScreen() {
     const { session } = useAuth();
@@ -29,15 +31,20 @@ function AddLanding({ userId }: { userId: string }) {
     const focused = useIsFocused(), { isActive, version } = useForegroundRefresh();
     const alive = useRef(false), active = useRef(false);
     const choosing = useRef(false);
+    const dismissSuggestions = useRef<(() => void) | null>(null);
     active.current = focused && isActive && !authLoading && session?.user.id === userId;
     const [recent, setRecent] = useState<AddRestaurant[]>([]), [error, setError] = useState("");
     const [loading, setLoading] = useState(true), [refresh, setRefresh] = useState(0);
+    const [recentWidth, setRecentWidth] = useState(0);
     const canOperate = () => alive.current && active.current && AppState.currentState === "active";
     const groupRecovery = state.attempts.some(attempt => attempt.destination.kind === "group")
         || state.previous.some(previous => previous.attempts.some(attempt => attempt.destination.kind === "group"));
     const unresolved = !!state.error || state.attempts.some(a => a.status !== "saved");
     const leave = useLeaveGuard({ userId, dirty: false, busy: state.busy, uncertain: unresolved,
         uncertainExitMessage: "Some destinations may already have saved. Finishing does not undo them. Review every destination before starting a separate save. Leaving this screen keeps recovery available in Add." });
+    useEffect(() => {
+        traceSearch("landing:state", { focused, active: isActive, ready: state.ready, busy: state.busy, attempts: state.attempts.length, error: !!state.error });
+    }, [focused, isActive, state.ready, state.busy, state.attempts.length, state.error]);
     useEffect(() => { alive.current = true; return () => { alive.current = false; }; }, []);
     useEffect(() => { choosing.current = false; }, [focused, isActive]);
     useEffect(() => {
@@ -76,7 +83,8 @@ function AddLanding({ userId }: { userId: string }) {
         choosing.current = true;
         coordinator.selectRestaurant(restaurant); router.push("/add-visit");
     }
-    return <PersonalAccess title="Add">{() => <ScreenScaffold keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag">
+    return <PersonalAccess title="Add">{() => <ScreenScaffold keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets
+        onTouchStart={() => dismissSuggestions.current?.()}>
         {leave.confirmation}
         {!state.ready ? <Text style={styles.message}>Checking save recovery...</Text> : state.attempts.length || state.error ? <AddResults canOperate={canOperate}
             separate={async (expected, temporary) => {
@@ -96,18 +104,37 @@ function AddLanding({ userId }: { userId: string }) {
                 } else leave.requestLeave(() => router.navigate("/"));
             }} /> : <>
             <Text style={styles.title}>Save a restaurant</Text>
-            <Text style={styles.message}>Find a restaurant, then choose My Places, your groups, or both.</Text>
-            <RestaurantSearch onSelect={choose} />
-            <Text style={styles.label}>Recently saved restaurants</Text>
-            <Text style={styles.message}>Choosing a restaurant does not select where to save your next visit.</Text>
+            <Text style={styles.message}>Choose a restaurant to start adding a visit.</Text>
+            <RestaurantSearch onSelect={choose} searchLabel="Search" primarySearch connectedAutocomplete dismissSuggestionsRef={dismissSuggestions}>
+                <Pressable accessibilityRole="button" style={styles.secondaryButton} onPress={() => { dismissSuggestions.current?.(); choose(null); }}>
+                    <Text style={styles.secondaryText}>Enter Restaurant Manually</Text></Pressable>
+            </RestaurantSearch>
+            <View style={landingStyles.sectionHeading}>
+                <Text accessibilityRole="header" style={[styles.label, styles.cardHeadingText, { marginBottom: 0 }]}>Recently saved restaurants</Text>
+                <Pressable accessibilityRole="button" accessibilityLabel="Refresh Recent Restaurants" accessibilityState={{ disabled: loading }}
+                    disabled={loading} style={[landingStyles.refresh, loading && styles.disabled]} onPress={() => { if (canOperate()) setRefresh(v => v + 1); }}>
+                    <Ionicons name="refresh-outline" size={22} color="#C9472C" accessible={false} importantForAccessibility="no" />
+                </Pressable>
+            </View>
+            <Text style={styles.message}>Swipe to browse · Tap to add another visit</Text>
             {loading ? <Text style={styles.message}>Loading recent restaurants...</Text> : error ? <Text style={styles.error}>{error}</Text> : !recent.length
-                ? <Text style={styles.message}>No saved restaurants yet.</Text> : recent.map((restaurant, index) => <Pressable key={`${restaurant.entry_id}:${index}`}
-                    accessibilityRole="button" style={styles.card} onPress={() => choose(restaurant)}>
-                    <Text style={styles.cardTitle}>{restaurant.name}</Text><Text style={styles.message}>{restaurant.address}</Text></Pressable>)}
-            <Pressable accessibilityRole="button" disabled={loading} style={styles.secondaryButton} onPress={() => { if (canOperate()) setRefresh(v => v + 1); }}>
-                <Text style={styles.secondaryText}>Refresh Recent Restaurants</Text></Pressable>
-            <Pressable accessibilityRole="button" style={styles.primaryButton} onPress={() => choose(null)}>
-                <Text style={styles.primaryText}>Enter Restaurant Manually</Text></Pressable>
+                ? <Text style={styles.message}>No saved restaurants yet.</Text> : <ScrollView horizontal
+                    showsHorizontalScrollIndicator={false} directionalLockEnabled nestedScrollEnabled
+                    keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag"
+                    style={landingStyles.recentList} contentContainerStyle={landingStyles.recentContent}
+                    onLayout={event => setRecentWidth(event.nativeEvent.layout.width)}>
+                    {recent.map((restaurant, index) => <Pressable key={`${restaurant.entry_id}:${index}`}
+                        accessibilityRole="button" accessibilityLabel={`${restaurant.name}, ${restaurant.address}`}
+                        accessibilityHint="Start another visit, then choose where to save it."
+                        style={[styles.card, landingStyles.recentCard, { width: recentWidth > 0 ? (recentWidth - 12) / 1.5 : 220 }]}
+                        onPress={() => choose(restaurant)}>
+                        <View style={landingStyles.recentFacts}>
+                            <Text style={styles.cardTitle} numberOfLines={2} ellipsizeMode="tail">{restaurant.name}</Text>
+                            <Text style={[styles.message, styles.cardMessage]} numberOfLines={2} ellipsizeMode="tail">{restaurant.address}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color="#79665E" accessible={false} importantForAccessibility="no" />
+                    </Pressable>)}
+                </ScrollView>}
         </>}
         {state.ready && <PreviousAddResults canOperate={canOperate} open={result => {
             if (choosing.current) return;
@@ -116,3 +143,12 @@ function AddLanding({ userId }: { userId: string }) {
         }} />}
     </ScreenScaffold>}</PersonalAccess>;
 }
+
+const landingStyles = StyleSheet.create({
+    sectionHeading: { flexDirection: "row", alignItems: "center", gap: 12, marginBottom: 12 },
+    refresh: { minWidth: 44, minHeight: 44, alignItems: "center", justifyContent: "center" },
+    recentList: { flexGrow: 0 },
+    recentContent: { gap: 12, paddingBottom: 4 },
+    recentCard: { flexDirection: "row", alignItems: "center", gap: 12, minHeight: 132, marginBottom: 0 },
+    recentFacts: { flex: 1, minWidth: 0, gap: 8 },
+});

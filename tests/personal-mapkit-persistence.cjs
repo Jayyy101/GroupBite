@@ -16,7 +16,7 @@ async function selectedForm(placeId){
         coordinator=f.rt.load('@/providers/unified-add').useUnifiedAdd().coordinator;
         return {type:f.rt.load(route).default,props:{}};
     });
-    await r.settle();await enter(r,'Search restaurants','Synthetic Burger Milpitas');await click(r,'Search Apple Maps');
+    await r.settle();await enter(r,'Search restaurants','Synthetic Burger Milpitas');await click(r,'Search');
     await click(r,`Choose restaurant: ${result.name}, ${result.address}`);
     assert.equal(coordinator.state.restaurant.mapkit_point.latitude,result.latitude);
     route='app/add-visit';r.dirty=true;await r.settle();

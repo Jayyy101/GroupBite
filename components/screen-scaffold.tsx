@@ -1,7 +1,7 @@
 import { backendStyles } from "@/styles/backend";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useState, type ReactNode, type Ref } from "react";
-import { Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollViewProps } from "react-native";
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View, type LayoutChangeEvent, type ScrollViewProps, type ViewProps } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 type Props = Pick<ScrollViewProps, "contentContainerStyle" | "keyboardShouldPersistTaps" | "keyboardDismissMode" | "automaticallyAdjustKeyboardInsets"> & {
@@ -12,6 +12,7 @@ type Props = Pick<ScrollViewProps, "contentContainerStyle" | "keyboardShouldPers
     edgeToEdge?: boolean;
     title?: string;
     includeBottomInset?: boolean;
+    onTouchStart?: ViewProps["onTouchStart"];
 };
 
 const BACK_SIZE = 44;
@@ -38,17 +39,17 @@ function CircularBack({ onBack, busy = false, compact = false, onLayout }: Pick<
 // inset; full-screen forms explicitly include it and use scroll keyboard insets.
 export function ScreenScaffold({ children, onBack, busy = false, scrollRef,
     contentContainerStyle, keyboardShouldPersistTaps, keyboardDismissMode, automaticallyAdjustKeyboardInsets,
-    includeBottomInset = false, edgeToEdge = false, title }: Props) {
+    includeBottomInset = false, edgeToEdge = false, title, onTouchStart }: Props) {
     const insets = useSafeAreaInsets();
     if (edgeToEdge && onBack && Platform.OS === "ios") {
         return <EdgeToEdgeScaffold onBack={onBack} busy={busy} scrollRef={scrollRef}
             contentContainerStyle={contentContainerStyle} keyboardShouldPersistTaps={keyboardShouldPersistTaps} title={title}
-            keyboardDismissMode={keyboardDismissMode} automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets} includeBottomInset={includeBottomInset}>
+            keyboardDismissMode={keyboardDismissMode} automaticallyAdjustKeyboardInsets={automaticallyAdjustKeyboardInsets} includeBottomInset={includeBottomInset} onTouchStart={onTouchStart}>
             {children}
         </EdgeToEdgeScaffold>;
     }
     const horizontal = { paddingLeft: Math.max(24, insets.left), paddingRight: Math.max(24, insets.right) };
-    return <View style={[backendStyles.screen, { paddingTop: insets.top }]}>
+    return <View style={[backendStyles.screen, { paddingTop: insets.top }]} onTouchStart={onTouchStart}>
         {onBack && <View style={[styles.navigation, horizontal]}>
             <CircularBack onBack={onBack} busy={busy} />
         </View>}
@@ -65,13 +66,13 @@ export function ScreenScaffold({ children, onBack, busy = false, scrollRef,
 }
 
 function EdgeToEdgeScaffold({ children, onBack, busy, scrollRef,
-    contentContainerStyle, keyboardShouldPersistTaps, keyboardDismissMode, automaticallyAdjustKeyboardInsets, includeBottomInset, title }: Props & { onBack: () => void }) {
+    contentContainerStyle, keyboardShouldPersistTaps, keyboardDismissMode, automaticallyAdjustKeyboardInsets, includeBottomInset, title, onTouchStart }: Props & { onBack: () => void }) {
     const insets = useSafeAreaInsets();
     const [backHeight, setBackHeight] = useState(BACK_SIZE);
     const backTop = insets.top + 4;
     const initialContentTop = backTop + backHeight + 8;
     const left = Math.max(24, insets.left), right = Math.max(24, insets.right);
-    return <View style={backendStyles.screen}>
+    return <View style={backendStyles.screen} onTouchStart={onTouchStart}>
         {/* Only Back intercepts touches; content scrolls beneath it and the status area. */}
         <View pointerEvents="box-none" style={{ position: "absolute", top: backTop, left, right, zIndex: 2 }}>
             <CircularBack compact onBack={onBack} busy={busy} onLayout={event => {

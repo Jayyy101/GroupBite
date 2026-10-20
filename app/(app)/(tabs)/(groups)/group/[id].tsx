@@ -294,11 +294,8 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
                 <>
                     <Text style={styles.message}>{isOwner ? "You are the Owner." : "You are a Member."}</Text>
                     {confirmation && <GroupMembershipConfirmation action={confirmation} busy={busy} onConfirm={handleMembership} onCancel={() => setConfirmation(null)} />}
-                    <Pressable accessibilityRole="button" disabled={blocked} onPress={() => router.push("/add")} style={[styles.primaryButton, blocked && styles.disabled]}>
-                        <Text style={styles.primaryText}>Add Restaurant / Visit</Text>
-                    </Pressable>
                     <Text style={styles.label}>Saved restaurants</Text>
-                    {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Add your first visit above!</Text>}
+                    {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Tap the Add tab at the bottom to save a visit.</Text>}
                     {restaurants.map(restaurant => (
                         <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: groupId, entryId: restaurant.id } }, { withAnchor: true })} style={styles.card}>
                             <View style={styles.cardBody}>

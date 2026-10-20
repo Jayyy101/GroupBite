@@ -1,5 +1,6 @@
 import { getMapKitSearchModule, type AppleSearchLocation, type AppleSearchMode, type AppleSearchSuggestion,
     type MapKitSearchModule } from "@/modules/groupbite-mapkit-search";
+import { traceSearch } from "@/lib/search-diagnostics";
 
 export type { AppleSearchLocation, AppleSearchMode, AppleSearchSuggestion } from "@/modules/groupbite-mapkit-search";
 export const CHIPOTLE_COMPARISON_ID = "8b6fdcaf-5915-4d13-811b-bf62a9c87ac3";
@@ -46,16 +47,18 @@ function validateQuery(query: string, mode: AppleSearchMode): string {
     return query;
 }
 
-async function operation(invoke: (native: MapKitSearchModule, requestId: string) => Promise<unknown>, signal: AbortSignal): Promise<unknown> {
+async function operation(action: "complete" | "search" | "resolve" | "lookup", invoke: (native: MapKitSearchModule, requestId: string) => Promise<unknown>, signal: AbortSignal): Promise<unknown> {
     if (signal.aborted) throw new AppleSearchError("cancelled", "Apple search cancelled.");
     const native = getMapKitSearchModule();
     if (!native) throw new AppleSearchError("unavailable", "Apple search requires the local iOS debug build; Expo Go is not supported.");
     const requestId = String(++sequence);
+    const trace = (event: string, data: Record<string, number | boolean | null> = {}) => traceSearch(`adapter:${action}:${event}`, { request: Number(requestId), ...data });
     return new Promise((resolve, reject) => {
         let done = false;
         const finish = (error?: AppleSearchError, value?: unknown) => {
             if (done) return;
             done = true; clearTimeout(timer); signal.removeEventListener("abort", abort);
+            trace(error ? `finish:${error.kind}` : "finish:success");
             if (error) { void native.cancel(requestId).catch(() => {}); reject(error); }
             else resolve(value);
         };
@@ -63,15 +66,18 @@ async function operation(invoke: (native: MapKitSearchModule, requestId: string)
         const timer = setTimeout(() => finish(new AppleSearchError("timeout", "Apple search timed out. Try again explicitly.")), 10000);
         signal.addEventListener("abort", abort, { once: true });
         try {
-            invoke(native, requestId).then(value => signal.aborted ? abort() : finish(undefined, value),
-                error => finish(nativeError(error)));
+            trace("dispatch");
+            invoke(native, requestId).then(value => {
+                trace("native-reply", { settled: done, aborted: signal.aborted, count: Array.isArray(value) ? value.length : -1 });
+                return signal.aborted ? abort() : finish(undefined, value);
+            }, error => { const mapped = nativeError(error); trace(`native-error:${mapped.kind}`, { settled: done }); finish(mapped); });
         } catch (error) { finish(nativeError(error)); }
     });
 }
 
 export async function completeAppleSearch(query: string, mode: AppleSearchMode, signal: AbortSignal): Promise<AppleSearchSuggestion[]> {
     query = validateQuery(query, mode);
-    const result = await operation((native, requestId) => native.complete(query, mode, requestId), signal);
+    const result = await operation("complete", (native, requestId) => native.complete(query, mode, requestId), signal);
     if (!Array.isArray(result) || result.length > 5) throw new AppleSearchError("unavailable", UNAVAILABLE);
     const seen = new Set<string>();
     return result.map(row => {
@@ -84,13 +90,13 @@ export async function completeAppleSearch(query: string, mode: AppleSearchMode, 
 
 export async function resolveAppleSuggestion(suggestionId: string, signal: AbortSignal): Promise<AppleSearchLocation[]> {
     if (!id(suggestionId)) throw new AppleSearchError("invalid", "Select a current suggestion.");
-    const result = await operation((native, requestId) => native.resolve(suggestionId, requestId), signal);
+    const result = await operation("resolve", (native, requestId) => native.resolve(suggestionId, requestId), signal);
     return locations(result);
 }
 
 export async function searchApplePlaces(query: string, mode: AppleSearchMode, signal: AbortSignal): Promise<AppleSearchLocation[]> {
     query = validateQuery(query, mode);
-    const result = await operation((native, requestId) => native.search(query, mode, requestId), signal);
+    const result = await operation("search", (native, requestId) => native.search(query, mode, requestId), signal);
     return locations(result);
 }
 
@@ -98,7 +104,7 @@ export async function lookupApplePlace(placeIdentifier: string, mode: AppleSearc
     if (!placeId(placeIdentifier) || !["business", "address"].includes(mode)) {
         throw new AppleSearchError("invalid", "Select a location with a valid Apple Place ID.");
     }
-    const result = await operation((native, requestId) => {
+    const result = await operation("lookup", (native, requestId) => {
         if (!supportsPlaceIdLookup(native)) throw { code: "ERR_UNSUPPORTED" };
         return native.lookupPlace!(placeIdentifier, mode, requestId);
     }, signal);
@@ -123,7 +129,10 @@ function locations(result: unknown): AppleSearchLocation[] {
 
 export function resetAppleSearch(): void {
     const native = getMapKitSearchModule();
-    if (native) void native.reset().catch(() => {});
+    if (native) {
+        traceSearch("adapter:reset-dispatch");
+        void native.reset().then(() => traceSearch("adapter:reset-complete"), () => traceSearch("adapter:reset-error"));
+    }
 }
 
 export function pinDistanceMeters(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }): number {

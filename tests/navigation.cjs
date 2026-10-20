@@ -334,6 +334,15 @@ function tabPress(r, h, name) {
             const r = screen(rt, route); await r.settle();
             const scroll = assertScaffold(r, insets, false);
             assert.equal(scroll.props.keyboardShouldPersistTaps, ['groups','add'].includes(route) ? 'handled' : undefined);
+            if (route === 'index') {
+                assert(textOf(r.output).includes('Welcome to GroupBite'));
+                assert(textOf(r.output).includes('Your restaurants and visits'));
+                assert(textOf(r.output).includes('My Places keeps your private memories. Groups holds the visits you share with friends.'));
+                assert.deepEqual(nodes(r.output).filter(n => n.type === 'Pressable').map(textOf), ['My Places', 'Groups']);
+                for (const [label, path] of [['My Places', '/my-places'], ['Groups', '/groups']]) {
+                    await click(r, label); assert.equal(rt.world.navigation.at(-1), path);
+                }
+            }
             r.unmount();
         }
         for (const route of ['groups', 'my-places']) {
@@ -366,6 +375,12 @@ function tabPress(r, h, name) {
             const rt = runtime({ mocks: clipboard, ...(route === 'groups' ? { fetch: backend } : route === 'group/[id]' ? { fetch: groupBackend } : {}) });
             rt.world.params = { id: groupId }; rt.world.rows = [fixture()];
             const r = screen(rt, route); await r.settle();
+            if (route === 'group/[id]') {
+                assert(textOf(r.output).includes('You are a Member.'));
+                assert(!textOf(r.output).includes('Add Restaurant / Visit'));
+                assert(!textOf(r.output).includes('No restaurants yet.'));
+                assert(!button(r, 'Leave Group').props.disabled); assert(!button(r, 'Refresh Group').props.disabled);
+            }
             const card = nodes(r.output).find(n => n.type === 'Pressable' && nodes(n).some(c => c.type === 'Icon' && c.props.name === 'chevron-forward'));
             assert(card); assert.equal(card.props.accessibilityRole, 'button');
             assert.equal(nodes(card).filter(n => n.type === 'Pressable').length, 1, 'Chevron is not a separate target');

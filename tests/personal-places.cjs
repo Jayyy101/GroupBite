@@ -20,6 +20,7 @@ function response(data, status = 200) { return new Response(JSON.stringify(data)
 function runtime(options = {}) {
     const world = { auth: { loading: false, error: '', session: { user: { id: 'a' }, access_token: 'fake-a' } },
         safeAreaInsets: options.safeAreaInsets ?? { top: 0, left: 0, right: 0, bottom: 0 },
+        windowDimensions: options.windowDimensions ?? { width: 390, height: 844, scale: 3, fontScale: 1 }, keyboardMetrics: undefined, keyboardListeners: new Map(),
         focused: true, params: {}, rows: [], visits: [], receipts: new Map(), journal: new Map(), requests: [], navigation: [], listeners: new Set(), intervals: new Set(), override: null,
         local: JSON.stringify([{ id: 'legacy', name: 'Local Cafe', notes: 'Device memory', wouldGoAgain: false }]), localReads: 0, localWrites: 0, lateUpdates: 0, keyboardDismissals: 0, links: [], removalGuards: new Set() };
     let nextId = 2;
@@ -129,7 +130,13 @@ function runtime(options = {}) {
     const mocks = {
         '@expo/vector-icons/Ionicons': { default: 'Icon' },
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator', Keyboard: { dismiss: () => world.keyboardDismissals++ },
+        'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
+            useWindowDimensions: () => world.windowDimensions,
+            Keyboard: { dismiss: () => world.keyboardDismissals++, metrics: () => world.keyboardMetrics,
+                addListener(event, listener) {
+                    const listeners = world.keyboardListeners.get(event) ?? new Set(); world.keyboardListeners.set(event, listeners); listeners.add(listener);
+                    return { remove: () => listeners.delete(listener) };
+                } },
             Linking: { async openURL(url) { world.links.push(url); } }, Platform: { OS: options.platform ?? 'web' }, StyleSheet: { create: x => x }, Pressable: 'Pressable', ScrollView: 'ScrollView', View: 'View', Text: 'Text', TextInput: 'TextInput' },
         'expo-router': { Redirect: 'Redirect', useRouter: () => router, useLocalSearchParams: () => world.params,
             useGlobalSearchParams: () => world.params, usePathname: () => world.pathname ?? '/',
@@ -172,7 +179,7 @@ function runtime(options = {}) {
             setTimeout: options.setTimeout ?? setTimeout, clearTimeout: options.clearTimeout ?? clearTimeout,
             fetch: options.autocompleteFetch ?? (() => assert.fail('Unexpected unmocked autocomplete Fetch')),
             process: { env: options.autocompleteEnv ?? {} },
-            AbortController, URL, URLSearchParams, Headers, Request, Response, __DEV__: options.development ?? false, Date, console });
+            AbortController, URL, URLSearchParams, Headers, Request, Response, __DEV__: options.development ?? false, Date, console: options.console ?? console });
         return module.exports;
     }
     function render(Screen, accountBoundary = true) {

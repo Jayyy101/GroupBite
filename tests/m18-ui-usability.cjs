@@ -17,14 +17,21 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
             placeId:'Opaque:Apple/'+i,latitude:37.5555437394246+i/1000,longitude:-121.982959052141,kind:'business',source:'apple-maps-preview'})));
         const original=JSON.stringify(candidates),native={isAvailable:()=>true,complete:async()=>[],resolve:async()=>candidates,
             search:async()=>candidates,reset:async()=>{},cancel:async()=>{}};
-        const f=model({platform:'ios',development:true,mocks:{expo:{requireOptionalNativeModule:()=>native}}});let selected;
-        function Host(){selected=f.rt.load('@/providers/unified-add').useUnifiedAdd().state.restaurant;return {type:f.rt.load('app/add').default,props:{}};}
-        const r=f.rt.render(Host);await r.settle();await enter(r,'Search restaurants','Restaurant Fremont');await click(r,'Search Apple Maps');
+        const f=model({platform:'ios',development:true,mocks:{expo:{requireOptionalNativeModule:()=>native}}});let selected,route='app/add';
+        function Host(){selected=f.rt.load('@/providers/unified-add').useUnifiedAdd().state.restaurant;return {type:f.rt.load(route).default,props:{}};}
+        const r=f.rt.render(Host);await r.settle();
+        assert(textOf(r.output).includes('Choose a restaurant to start adding a visit.'));
+        assert.equal(flatten(button(r,'Search').props.style).backgroundColor,'#C9472C');
+        assert.equal(flatten(button(r,'Enter Restaurant Manually').props.style).borderColor,'#E85D3F');
+        await enter(r,'Search restaurants','Restaurant Fremont');await click(r,'Search');
         const scrolls=nodes(r.output).filter(n=>n.type==='ScrollView');assert.equal(scrolls.length,1);
         assert.equal(scrolls[0].props.keyboardShouldPersistTaps,'handled');assert.equal(scrolls[0].props.keyboardDismissMode,'on-drag');
         assert.equal(nodes(r.output).filter(n=>['MapView','Marker'].includes(n.type)).length,0);
         for(const c of candidates){const card=button(r,`Choose restaurant: ${c.name}, ${c.address}`);assert(textOf(card).includes(c.address));
             assert.equal(flatten(card.props.style).flex,undefined);for(const t of nodes(card).filter(n=>n.type==='Text'))assert.equal(t.props.numberOfLines,undefined);}
+        const actions=nodes(r.output).filter(n=>n.type==='Pressable');
+        assert.equal(actions.indexOf(button(r,'Enter Restaurant Manually')),actions.indexOf(button(r,'Search'))+1);
+        assert(actions.indexOf(button(r,'Enter Restaurant Manually'))<actions.indexOf(button(r,`Choose restaurant: ${candidates[0].name}, ${candidates[0].address}`)));
         assert(textOf(r.output).indexOf('Recently saved restaurants')>textOf(r.output).indexOf(address+' 4'));
         await click(r,`Choose restaurant: ${candidates[4].name}, ${candidates[4].address}`);
         assert.equal(selected.apple_place_id,candidates[4].placeId);assert.equal(selected.address,candidates[4].address);
@@ -33,7 +40,86 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
         assert.equal(selected.mapkit_point.longitude,candidates[4].longitude);
         const locations=await f.rt.load('@/lib/apple-map-search').searchApplePlaces('Restaurant Fremont','business',new AbortController().signal);
         assert.equal(locations[4].latitude,candidates[4].latitude);assert.equal(locations[4].longitude,candidates[4].longitude);
-        assert.equal(locations[4].placeId,candidates[4].placeId);assert.equal(JSON.stringify(candidates),original);r.unmount();
+        assert.equal(locations[4].placeId,candidates[4].placeId);assert.equal(JSON.stringify(candidates),original);
+        assert.equal(f.rt.world.navigation.at(-1),'/add-visit');route='app/add-visit';r.dirty=true;await r.settle();
+        assert.equal(nodes(r.output).find(n=>n.props?.accessibilityLabel==='Restaurant address').props.value,candidates[4].address);
+        assert(nodes(r.output).filter(n=>n.props?.accessibilityRole==='checkbox').every(n=>!n.props.accessibilityState.checked));
+        assert.equal(f.state.visits.length,0);r.unmount();
+    });
+    await test('Add keeps manual entry and accessible Refresh above recent cards through loading, error and empty states',async()=>{
+        const f=model(),r=f.render('add');await r.settle();
+        const recent=Array.from({length:12},(_,i)=>({name:'Recent Cafe '+i,address:'Address '+i,cuisine:null}));
+        const assertActions=()=>{
+            const all=nodes(r.output),manual=button(r,'Enter Restaurant Manually'),refresh=button(r,'Refresh Recent Restaurants');
+            const heading=all.find(n=>n.type==='Text'&&textOf(n)==='Recently saved restaurants');
+            assert(all.indexOf(manual)<all.indexOf(heading));
+            assert(all.some(n=>n.type==='View'&&n.props.children?.includes?.(heading)&&n.props.children.includes(refresh)));
+            assert.equal(all.filter(n=>n.type==='Pressable'&&textOf(n)==='Enter Restaurant Manually').length,1);
+            assert.equal(all.filter(n=>n.type==='Pressable'&&n.props.accessibilityLabel==='Refresh Recent Restaurants').length,1);
+            const style=flatten(refresh.props.style);assert(style.minWidth>=44&&style.minHeight>=44);
+            assert(nodes(refresh).some(n=>n.type==='Icon'&&n.props.name==='refresh-outline'&&n.props.accessible===false));
+            assert.equal(all.filter(n=>n.type==='ScrollView'&&!n.props.horizontal).length,1);
+            return {all,manual,refresh};
+        };
+        assertActions();assert(textOf(r.output).includes('No saved restaurants yet.'));
+        const gate=defer();f.state.override=c=>c.url.pathname.endsWith('/get_recent_add_restaurants')?gate.promise:null;
+        await click(r,'Refresh Recent Restaurants');
+        const loading=assertActions();assert(loading.refresh.props.disabled);assert(loading.refresh.props.accessibilityState.disabled);
+        assert(textOf(r.output).includes('Loading recent restaurants...'));assert(!loading.manual.props.disabled);
+        gate.resolve(response(recent));await r.settle();
+        const populated=assertActions();assert.equal(populated.refresh.props.disabled,false);
+        for(const restaurant of recent){const card=button(r,restaurant.name+' '+restaurant.address);
+            assert(populated.all.indexOf(populated.refresh)<populated.all.indexOf(card));}
+        assert(textOf(r.output).includes('Swipe to browse · Tap to add another visit'));
+        assert(!textOf(r.output).includes('Choosing a restaurant does not select where to save your next visit.'));
+        f.state.override=c=>c.url.pathname.endsWith('/get_recent_add_restaurants')?response({},503):null;
+        await click(r,'Refresh Recent Restaurants');assertActions();
+        assert(textOf(r.output).includes('Could not load recent restaurants.'));assert(!textOf(r.output).includes('Recent Cafe'));
+        f.state.override=null;await click(r,'Refresh Recent Restaurants');assertActions();assert(textOf(r.output).includes('No saved restaurants yet.'));
+        assert.equal(f.rt.world.requests.filter(c=>c.url.pathname.endsWith('/get_recent_add_restaurants')).length,4);
+        await click(r,'Enter Restaurant Manually');assert.equal(f.rt.world.navigation.at(-1),'/add-visit');assert.equal(f.state.visits.length,0);r.unmount();
+    });
+    await test('Live suggestions resolve cached completions before opening the chosen restaurant in unified Add',async()=>{
+        let cached=false,route='app/add',selected;
+        const candidates=[{id:'1:0',name:'Cafe North',address:'10 Main Street, North City',latitude:37,longitude:-122},
+            {id:'1:1',name:'Cafe South',address:'20 Main Street, South City',latitude:37.5,longitude:-121.5}]
+            .map(item=>({...item,placeId:'Opaque:'+item.name,kind:'business',source:'apple-maps-preview'}));
+        const native={isAvailable:()=>true,complete:async(q,m,id)=>{cached=true;return [{id:id+':0',title:'Cafe',subtitle:'Main Street'}];},
+            resolve:async()=>{assert(cached);return candidates;},search:async()=>assert.fail('Suggestions must resolve their cached completion'),
+            reset:async()=>{cached=false;},cancel:async()=>{}};
+        const f=model({platform:'ios',development:true,mocks:{expo:{requireOptionalNativeModule:()=>native}}});
+        const r=f.rt.render(()=>{selected=f.rt.load('@/providers/unified-add').useUnifiedAdd().state.restaurant;return {type:f.rt.load(route).default,props:{}};});
+        await r.settle();await enter(r,'Search restaurants','Cafe');await new Promise(resolve=>setTimeout(resolve,420));await r.settle();
+        await click(r,'Cafe Main Street');assert.equal(f.rt.world.navigation.length,0);
+        await click(r,'Choose restaurant: Cafe South, 20 Main Street, South City');
+        assert.equal(f.rt.world.navigation.at(-1),'/add-visit');assert.equal(selected.apple_place_id,candidates[1].placeId);
+        assert.equal(selected.mapkit_point.latitude,candidates[1].latitude);assert.equal(selected.mapkit_point.longitude,candidates[1].longitude);
+        route='app/add-visit';r.dirty=true;await r.settle();
+        assert.equal(nodes(r.output).find(n=>n.props?.accessibilityLabel==='Restaurant name').props.value,candidates[1].name);
+        assert.equal(nodes(r.output).find(n=>n.props?.accessibilityLabel==='Restaurant address').props.value,candidates[1].address);
+        assert(nodes(r.output).filter(n=>n.props?.accessibilityRole==='checkbox').every(n=>!n.props.accessibilityState.checked));
+        assert.equal(f.state.visits.length,0);r.unmount();
+    });
+    await test('Recent restaurants scroll horizontally with a half-card preview and retain full accessible identity on selection',async()=>{
+        const recent=Array.from({length:4},(_,i)=>({name:'Recent restaurant '+i,address:`${i} Main Street, Suite 123, Long Neighborhood, Test City, California 90000`,
+            cuisine:'Italian',apple_place_id:'Opaque:'+i,destination_kind:'group',group_id:groupId,entry_id:uuid(i+1)}));
+        const f=model({recent});let selected;
+        const r=f.rt.render(()=>{selected=f.rt.load('@/providers/unified-add').useUnifiedAdd().state.restaurant;return {type:f.rt.load('app/add').default,props:{}};});
+        await r.settle();const list=()=>nodes(r.output).find(n=>n.type==='ScrollView'&&n.props.horizontal);
+        assert(list());assert.equal(list().props.keyboardShouldPersistTaps,'handled');assert(list().props.directionalLockEnabled);assert(list().props.nestedScrollEnabled);
+        assert.equal(flatten(list().props.style).flexGrow,0);assert.equal(nodes(list()).filter(n=>n.type==='Pressable').length,4);
+        for(const width of [272,342,700]){
+            list().props.onLayout({nativeEvent:{layout:{width}}});await r.settle();
+            const card=button(r,recent[0].name+', '+recent[0].address),cardStyle=flatten(card.props.style);
+            assert(Math.abs(cardStyle.width*1.5+flatten(list().props.contentContainerStyle).gap-width)<0.01);
+            assert(cardStyle.minHeight>=44);assert(nodes(list()).includes(card));
+            assert(nodes(card).some(n=>n.type==='Icon'&&n.props.name==='chevron-forward'&&n.props.accessible===false));
+            const address=nodes(card).find(n=>n.type==='Text'&&textOf(n)===recent[0].address);
+            assert.equal(address.props.numberOfLines,2);assert.equal(address.props.ellipsizeMode,'tail');
+        }
+        assert.equal(nodes(r.output).filter(n=>n.type==='Text'&&textOf(n)==='Swipe to browse · Tap to add another visit').length,1);
+        const last=recent[3];await click(r,last.name+', '+last.address);
+        assert.equal(JSON.stringify(selected),JSON.stringify(last));assert.equal(f.rt.world.navigation.at(-1),'/add-visit');assert.equal(f.state.visits.length,0);r.unmount();
     });
     await test('Destination cards highlight independently, show a checkmark and retain accessible checked state',async()=>{
         const f=model(),r=f.render();await r.settle();
@@ -71,10 +157,15 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
         const rows=await rt.load('@/lib/personal-places').listPersonalPlaces('a');assert.equal(rows[0].average_rating,2.5);assert.equal(rows[0].rated_visit_count,4);assert.equal(rows[0].total_visit_count,5);
         assert.equal(rt.world.requests.filter(c=>c.url.pathname==='/rest/v1/personal_visits').length,4);
     });
-    await test('Failed history reads show an error instead of false zero counts; refresh recomputes from history',async()=>{
+    await test('My Places refresh preserves errors, guides empty lists to the Add tab and restores populated cards',async()=>{
         const rt=runtime();rt.world.rows=[fixture()];rt.world.override=c=>c.url.pathname==='/rest/v1/personal_visits'?response({message:'offline'},503):null;
         const r=screen(rt,'my-places');await r.settle();assert(!textOf(r.output).includes('Private Cafe'));assert(!textOf(r.output).includes('0 total visits'));
-        rt.world.override=null;await click(r,'Refresh My Places');assert(textOf(r.output).includes('No ratings yet · 0 rated / 0 total visits'));r.unmount();
+        assert(!textOf(r.output).includes('Tap the Add tab'));
+        rt.world.override=null;rt.world.rows=[];await click(r,'Refresh My Places');
+        assert(textOf(r.output).includes('No personal places yet. Tap the Add tab at the bottom to save your first visit.'));
+        assert(!textOf(r.output).includes('Add a Restaurant'));
+        rt.world.rows=[fixture()];await click(r,'Refresh My Places');assert(textOf(r.output).includes('No ratings yet · 0 rated / 0 total visits'));
+        assert(!textOf(r.output).includes('Tap the Add tab'));assert(!textOf(r.output).includes('Add a Restaurant'));r.unmount();
     });
     await test('Account replacement hides pending history summaries and stops the old account paging',async()=>{
         const gate=defer(),rt=runtime();rt.world.rows=[fixture({name:'A-only restaurant'})];

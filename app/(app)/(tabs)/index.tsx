@@ -16,14 +16,6 @@ export default function Index() {
 
       <Pressable
         accessibilityRole="button"
-        onPress={() => router.navigate("/add")}
-        style={styles.primaryButton}
-      >
-        <Text style={styles.primaryButtonText}>Save a place</Text>
-      </Pressable>
-
-      <Pressable
-        accessibilityRole="button"
         onPress={() => router.push("/my-places")}
         style={[backendStyles.secondaryButton, styles.secondaryButton]}
       >
@@ -65,18 +57,6 @@ const styles = StyleSheet.create({
     lineHeight: 25,
     marginTop: 12,
     maxWidth: 320,
-  },
-  primaryButton: {
-    alignItems: "center",
-    backgroundColor: "#C9472C",
-    borderRadius: 14,
-    marginTop: 36,
-    paddingVertical: 16,
-  },
-  primaryButtonText: {
-    color: "#FFFFFF",
-    fontSize: 17,
-    fontWeight: "600",
   },
   secondaryButton: { marginTop: 12, marginBottom: 0 },
   emptyState: {
