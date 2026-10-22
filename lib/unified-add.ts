@@ -10,12 +10,12 @@ import type { AddDestinationResult, AddRestaurant, AddVisitArgs } from "@/types/
 export type Destination = Readonly<{ kind: "personal" | "group"; groupId?: string; membershipId?: string; label: string }>;
 export type AddFields = { restaurant: AddRestaurant; visited_on: string | null; rating: number | null;
     would_go_again: boolean | null; privateNotes: string; groupNotes: string };
-export type Submission = Readonly<{ userId: string; destination: Destination; args: Readonly<AddVisitArgs>;
+export type Submission = Readonly<{ userId: string; destination: Destination; args: Readonly<AddVisitArgs>; eventId?: string;
     mapkitPoint?: Readonly<{ latitude: number; longitude: number; structured_address?: MapKitAddress }> }>;
-export type Attempt = Readonly<{ requestId: string; destination: Destination; status: "pending" | "saved" | "failed" | "uncertain";
+export type Attempt = Readonly<{ requestId: string; eventId?: string; destination: Destination; status: "pending" | "saved" | "failed" | "uncertain";
     submission?: Submission; result?: AddDestinationResult; message?: string }>;
 export type PreviousAdd = Readonly<{ id: string; attempts: readonly Attempt[]; durable: boolean; unreadable: boolean }>;
-type Marker = { requestId: string; kind: "personal" | "group"; groupId?: string; status?: Attempt["status"] };
+type Marker = { requestId: string; eventId?: string; kind: "personal" | "group"; groupId?: string; status?: Attempt["status"] };
 type ArchivedAdd = { id: string; markers: Marker[]; raw?: string; unreadable: boolean };
 export type AddState = Readonly<{ ready: boolean; busy: boolean; attempts: readonly Attempt[]; error: string; restaurant: AddRestaurant | null;
     previous: readonly PreviousAdd[]; historyError: string }>;
@@ -28,16 +28,17 @@ const historyKey = (userId: string) => `groupbite:add-recovery-history:v1:${user
 const journalWrites = new Map<string, Promise<void>>();
 const failure = "Could not confirm this destination. Check Saved Results; do not submit it again.";
 
-const marker = (attempt: Attempt): Marker => ({ requestId: attempt.requestId, kind: attempt.destination.kind,
+const marker = (attempt: Attempt): Marker => ({ requestId: attempt.requestId, ...(attempt.eventId ? { eventId: attempt.eventId } : {}), kind: attempt.destination.kind,
     ...(attempt.destination.groupId ? { groupId: attempt.destination.groupId } : {}), status: attempt.status });
 function validMarker(row: unknown): row is Marker {
     if (!row || typeof row !== "object") return false;
     const value = row as Marker;
     return typeof value.requestId === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(value.requestId)
+        && (value.eventId === undefined || (typeof value.eventId === "string" && /^[a-zA-Z0-9-]{1,100}$/.test(value.eventId)))
         && ["personal", "group"].includes(value.kind) && (value.kind !== "group" || isUuid(value.groupId))
         && (value.status === undefined || ["pending", "saved", "failed", "uncertain"].includes(value.status));
 }
-const restoredAttempt = (row: Marker, archived = false): Attempt => ({ requestId: row.requestId,
+const restoredAttempt = (row: Marker, archived = false): Attempt => ({ requestId: row.requestId, ...(row.eventId ? { eventId: row.eventId } : {}),
     destination: { kind: row.kind, groupId: row.kind === "group" ? row.groupId : undefined, label: row.kind === "personal" ? "My Places" : "Group" },
     status: archived ? row.status ?? "uncertain" : "uncertain" });
 function history(raw: string | null): ArchivedAdd[] {
@@ -58,7 +59,7 @@ const previousAdd = (record: ArchivedAdd, durable: boolean, known: readonly Atte
 
 export function freezeAddSubmissions(userId: string, fields: AddFields, destinations: readonly Destination[]): Submission[] {
     if (!destinations.length || destinations.length > 50) throw new Error("Choose at least one destination.");
-    const unique = new Set<string>();
+    const unique = new Set<string>(), eventId = requestId();
     return destinations.map(destination => {
         if (!["personal", "group"].includes(destination.kind)) throw new Error("Invalid destination.");
         const identity = destination.kind === "personal" ? "personal" : destination.groupId;
@@ -91,7 +92,7 @@ export function freezeAddSubmissions(userId: string, fields: AddFields, destinat
             throw new Error("Select this restaurant's location again before saving.");
         }
         const address = point ? normalizeMapKitAddress(point.structured_address) : undefined;
-        return Object.freeze({ userId, destination: Object.freeze({ ...destination }), args: Object.freeze(args),
+        return Object.freeze({ userId, eventId, destination: Object.freeze({ ...destination }), args: Object.freeze(args),
             ...(point ? { mapkitPoint: Object.freeze({ latitude: point.latitude, longitude: point.longitude,
                 ...(address ? { structured_address: address } : {}) }) } : {}) });
     });
@@ -104,8 +105,11 @@ const definitive = (error: unknown): error is ServerRejection => error instanceo
 export async function sendAddSubmission(submission: Submission, canSend: () => boolean): Promise<AddDestinationResult | null> {
     const token = await withRequestDeadline(() => accountAccessToken(submission.userId));
     if (!canSend()) return null;
-    const { destination, args, mapkitPoint } = submission;
-    const response = await withRequestDeadline(signal => (destination.kind === "personal"
+    const { destination, args, mapkitPoint, eventId } = submission;
+    const response = await withRequestDeadline(signal => (eventId ? supabase.rpc("save_visit_event_destination", { ...args,
+            client_event_id: eventId, destination_kind: destination.kind, target_group_id: destination.groupId ?? null,
+            expected_membership_id: destination.membershipId ?? null, selected_latitude: mapkitPoint?.latitude ?? null,
+            selected_longitude: mapkitPoint?.longitude ?? null, selected_address: mapkitPoint?.structured_address ?? null }) : destination.kind === "personal"
         ? mapkitPoint ? supabase.rpc("save_personal_visit_with_mapkit_location", { ...args,
             selected_latitude: mapkitPoint.latitude, selected_longitude: mapkitPoint.longitude,
             selected_address: mapkitPoint.structured_address ?? null }) : supabase.rpc("save_personal_visit", { ...args })
@@ -243,7 +247,8 @@ export class AddCoordinator {
                 if (!row || typeof row.requestId !== "string" || !/^[a-zA-Z0-9-]{1,100}$/.test(row.requestId) || seen.has(row.requestId)
                     || !["personal", "group"].includes(row.kind) || (row.kind === "group" && !isUuid(row.groupId))) throw new Error("Invalid recovery journal.");
                 seen.add(row.requestId);
-                return { requestId: row.requestId, destination: { kind: row.kind, groupId: row.kind === "group" ? row.groupId : undefined,
+                if (!validMarker(row)) throw new Error("Invalid recovery event marker.");
+                return { requestId: row.requestId, ...(row.eventId ? { eventId: row.eventId } : {}), destination: { kind: row.kind, groupId: row.kind === "group" ? row.groupId : undefined,
                     label: row.kind === "personal" ? "My Places" : "Group" }, status: "uncertain" };
             });
             this.update({ attempts, error: keepUnknown && !attempts.length ? missing : "" });
@@ -261,7 +266,7 @@ export class AddCoordinator {
         if (this.disposed || !this.state.ready || this.state.busy || this.state.attempts.length || this.state.error || !canSend()) return;
         const submissions = freezeAddSubmissions(this.userId, fields, destinations);
         this.update({ busy: true, attempts: submissions.map(submission => ({ requestId: submission.args.client_request_id,
-            destination: submission.destination, submission, status: "pending" })) });
+            eventId: submission.eventId, destination: submission.destination, submission, status: "pending" })) });
         try {
             // Persist ALL markers before ANY mutation. Storage failure dispatches
             // nothing. A crash before dispatch remains conservatively uncertain.
@@ -275,7 +280,7 @@ export class AddCoordinator {
                     await this.preserve(retained);
                 }
                 await AsyncStorage.setItem(key(this.userId), JSON.stringify(submissions.map(s => ({
-                    requestId: s.args.client_request_id, kind: s.destination.kind, ...(s.destination.groupId ? { groupId: s.destination.groupId } : {}) }))));
+                    requestId: s.args.client_request_id, eventId: s.eventId, kind: s.destination.kind, ...(s.destination.groupId ? { groupId: s.destination.groupId } : {}) }))));
             });
             this.pendingArchives = this.pendingArchives.filter(record => !retained.includes(record));
             this.update({ previous: this.state.previous.map(record => {
@@ -300,7 +305,9 @@ export class AddCoordinator {
                     if (result) this.replace(attempt.requestId, { status: "saved", result, message: "" });
                 } catch (error) {
                     this.replace(attempt.requestId, { status: definitive(error) ? "failed" : "uncertain",
-                        message: definitive(error) ? error.code === "PGRST202" && attempt.submission.mapkitPoint
+                        message: definitive(error) ? error.code === "PGRST202" && attempt.submission.eventId
+                            ? "Visit saving needs the pending backend update. Nothing was saved to this destination."
+                            : error.code === "PGRST202" && attempt.submission.mapkitPoint
                             ? "Apple Maps location saving needs the pending backend update. Nothing was saved to this destination."
                             : error.code === "GB001" ? "Not saved: this restaurant already has different Apple Maps details. Choose the saved restaurant to add a visit."
                             : error.code === "GB002" ? "Not saved: only the group Owner can add Apple Maps details to an existing restaurant. Choose the saved restaurant to add a visit."

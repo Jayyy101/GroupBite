@@ -1,3 +1,4 @@
+import { backToContext, detailFallback, detailOriginParams, type DetailOrigin } from "@/lib/restaurant-navigation";
 import { PersonalAccess } from "@/components/personal-access";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import PersonalApplePlaceLookup from "@/components/personal-apple-place-lookup";
@@ -11,14 +12,14 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
-export default function PersonalPlaceScreen({ fromAdd = false, fromMap = false }: { fromAdd?: boolean; fromMap?: boolean }) {
+export default function PersonalPlaceScreen({ origin = "collection" }: { origin?: DetailOrigin }) {
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
-    return <PersonalAccess title="Personal Place">{userId => <PersonalPlaceDetails key={`${userId}:${JSON.stringify(id)}`} userId={userId} id={id} fromAdd={fromAdd} fromMap={fromMap} />}</PersonalAccess>;
+    return <PersonalAccess title="Personal Place">{userId => <PersonalPlaceDetails key={`${userId}:${JSON.stringify(id)}`} userId={userId} id={id} origin={origin} />}</PersonalAccess>;
 }
 
-function PersonalPlaceDetails({ userId, id, fromAdd, fromMap }: { userId: string; id?: string | string[]; fromAdd: boolean; fromMap: boolean }) {
+function PersonalPlaceDetails({ userId, id, origin }: { userId: string; id?: string | string[]; origin: DetailOrigin }) {
     const router = useRouter();
-    const back = () => fromAdd || fromMap ? (router.canGoBack() ? router.back() : router.replace(fromMap ? "/saved-map" : "/add")) : router.dismissTo("/my-places");
+    const back = () => backToContext(router, detailFallback(origin));
     const [place, setPlace] = useState<PersonalPlace | null>(null);
     const [visits, setVisits] = useState<PersonalVisit[]>([]);
     const [loading, setLoading] = useState(true);
@@ -72,7 +73,7 @@ function PersonalPlaceDetails({ userId, id, fromAdd, fromMap }: { userId: string
                 <Text style={styles.message}>{place.address}</Text>
                 {place.cuisine !== null && <Text style={styles.message}>Cuisine: {place.cuisine}</Text>}
                 <Pressable accessibilityRole="button" disabled={busy || confirming || repairLocked} style={styles.primaryButton}
-                    onPress={() => { if (mounted.current && !submitting.current) router.push({ pathname: "/add-visit", params: { personalId: place.id } }); }}><Text style={styles.primaryText}>Add Another Visit</Text></Pressable>
+                    onPress={() => { if (mounted.current && !submitting.current) router.push({ pathname: "/add-visit", params: { personalId: place.id, ...detailOriginParams(origin) } }); }}><Text style={styles.primaryText}>Add Another Visit</Text></Pressable>
                 <Text style={styles.cardTitle}>Personal visit history ({visits.length})</Text>
                 {!visits.length && <Text style={styles.message}>No recorded personal visits yet.</Text>}
                 {visits.map(visit => <View key={visit.id} style={styles.card}>
@@ -83,14 +84,14 @@ function PersonalPlaceDetails({ userId, id, fromAdd, fromMap }: { userId: string
                     {visit.notes !== null && <Text style={styles.message}>{visit.notes}</Text>}
                     {(["edit","delete"] as const).map(action => <Pressable key={action} accessibilityRole="button" disabled={busy || confirming || repairLocked}
                         accessibilityLabel={`${action === "edit" ? "Edit" : "Delete"} personal visit ${visit.visited_on ?? "without date"}`}
-                        style={styles.secondaryButton} onPress={() => { if (mounted.current && !submitting.current) router.push({ pathname: "/personal-visit-form", params: { id: place.id, visitId: visit.id, action, ...(fromAdd ? { fromAdd: "1" } : {}), ...(fromMap ? { fromMap: "1" } : {}) } }); }}>
+                        style={styles.secondaryButton} onPress={() => { if (mounted.current && !submitting.current) router.push({ pathname: "/personal-visit-form", params: { id: place.id, visitId: visit.id, action, ...detailOriginParams(origin) } }); }}>
                         <Text style={styles.secondaryText}>{action === "edit" ? "Edit Visit" : "Delete Visit"}</Text></Pressable>)}
                 </View>)}
                 {__DEV__ && <PersonalApplePlaceLookup key={`${place.id}:${place.revision}:${refresh}`} applePlaceId={place.apple_place_id} disabled={busy || confirming} />}
                 {__DEV__ && <DevPersonalLocationRepair key={`repair:${place.id}:${place.revision}:${refresh}`} userId={userId} place={place}
                     disabled={busy || confirming} onLockChange={setRepairLocked} />}
                 {!confirming ? <>
-                    <Pressable accessibilityRole="button" disabled={busy || repairLocked} onPress={() => router.push({ pathname: "/personal-place-form", params: { id: place.id, ...(fromAdd ? { fromAdd: "1" } : {}), ...(fromMap ? { fromMap: "1" } : {}) } })} style={styles.primaryButton}><Text style={styles.primaryText}>Edit Personal Place</Text></Pressable>
+                    <Pressable accessibilityRole="button" disabled={busy || repairLocked} onPress={() => router.push({ pathname: "/personal-place-form", params: { id: place.id, ...detailOriginParams(origin) } })} style={styles.primaryButton}><Text style={styles.primaryText}>Edit Personal Place</Text></Pressable>
                     <Pressable accessibilityRole="button" disabled={busy || repairLocked} onPress={() => { if (mounted.current && !submitting.current) { confirmation.current = place; setConfirming(true); } }} style={styles.secondaryButton}><Text style={styles.secondaryText}>Delete Personal Place</Text></Pressable>
                 </> : <View>
                     <Text style={styles.message}>Permanently delete this personal saved place and all its visit history? This cannot be undone. Group Visits and device-local Places are unaffected.</Text>

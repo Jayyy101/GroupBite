@@ -1,3 +1,4 @@
+import { backToContext, detailFallback, detailOriginParams, type DetailOrigin } from "@/lib/restaurant-navigation";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import GroupApplePlaceLookup from "@/components/group-apple-place-lookup";
 import { useVisitManagement } from "@/components/visit-management";
@@ -12,23 +13,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
-export default function GroupRestaurantScreen({ fromAdd = false, fromMap = false }: { fromAdd?: boolean; fromMap?: boolean }) {
+export default function GroupRestaurantScreen({ origin = "collection" }: { origin?: DetailOrigin }) {
     const router = useRouter();
     const { id, entryId } = useLocalSearchParams<{ id?: string | string[]; entryId?: string | string[] }>();
     const { session, loading } = useAuth();
     if (!loading && session && isUuid(id) && isUuid(entryId)) {
-        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} fromAdd={fromAdd} fromMap={fromMap} />;
+        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} origin={origin} />;
     }
     return (
-        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => fromAdd || fromMap ? (router.canGoBack() ? router.back() : router.replace(fromMap ? "/saved-map" : "/add")) : router.dismissTo("/groups")}>
+        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => backToContext(router, origin === "collection" ? "/groups" : detailFallback(origin))}>
             <Text style={styles.message}>{loading ? "Restoring your session..." : !session ? "Sign in to view group visits." : "This restaurant could not be found."}</Text>
         </ScreenScaffold>
     );
 }
 
-function RestaurantDetails({ groupId, entryId, userId, fromAdd, fromMap }: { groupId: string; entryId: string; userId: string; fromAdd: boolean; fromMap: boolean }) {
+function RestaurantDetails({ groupId, entryId, userId, origin }: { groupId: string; entryId: string; userId: string; origin: DetailOrigin }) {
     const router = useRouter();
-    const back = () => fromAdd || fromMap ? (router.canGoBack() ? router.back() : router.replace(fromMap ? "/saved-map" : "/add")) : router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
+    const back = () => backToContext(router, detailFallback(origin, groupId));
     const [restaurant, setRestaurant] = useState<GroupRestaurantSummary | null>(null);
     const [visits, setVisits] = useState<GroupVisit[]>([]);
     const [detailsLoading, setDetailsLoading] = useState(true);
@@ -128,7 +129,7 @@ function RestaurantDetails({ groupId, entryId, userId, fromAdd, fromMap }: { gro
                     <Text style={styles.message}>{visibleRestaurant.address}</Text>
                     {visibleRestaurant.cuisine && <Text style={styles.message}>{visibleRestaurant.cuisine}</Text>}
                     <Text style={styles.message}>{visitSummary(visibleRestaurant)}</Text>
-                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
+                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id, ...detailOriginParams(origin) } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Another Visit</Text>
                     </Pressable>
                     {__DEV__ && <GroupApplePlaceLookup key={`${userId}:${groupId}:${entryId}:${accessKey}`}

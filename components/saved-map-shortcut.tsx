@@ -6,7 +6,7 @@ export default function SavedMapShortcut() {
     const router = useRouter();
     if (!__DEV__ || Platform.OS !== "ios") return null;
     return <Pressable accessibilityRole="button" accessibilityLabel="Open Saved Map" accessibilityHint="Browse My Places and your groups on a map."
-        onPress={() => router.push({ pathname: "/saved-map", params: { fromHome: "1" } }, { withAnchor: true })}
+        onPress={() => router.push("/home/saved-map", { withAnchor: true })}
         style={({ pressed }) => [s.card, pressed && s.pressed]}>
         <View style={s.icon}><Ionicons name="map-outline" size={28} color="#A43922" accessible={false} /></View>
         <View style={s.body}><Text style={s.title}>Saved Map</Text><Text style={s.caption}>Explore My Places & your groups</Text></View>

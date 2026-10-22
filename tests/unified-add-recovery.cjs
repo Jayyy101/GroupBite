@@ -15,8 +15,8 @@ function storage(){return {values:new Map(),operations:[],failActiveRead:false,f
  async removeItem(k){this.operations.push(['remove',k]);if(this.failRemove)throw Error('private raw storage failure');this.values.delete(k);}};}
 function host(f,name='add'){let coordinator;const Provider=f.rt.load('@/providers/unified-add'),Screen=f.rt.load('app/'+name).default;
  const r=f.rt.render(()=>{coordinator=Provider.useUnifiedAdd().coordinator;return {type:Screen,props:{}};});return {r,get coordinator(){return coordinator;}};}
-async function failed(f,c){f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?response({code:'42501'},403):null;await c.start(fields(),destinations().slice(0,1),()=>true);}
-async function uncertain(f,c,commit=false){f.state.override=call=>{if(!call.url.pathname.endsWith('/save_personal_visit'))return null;if(commit)f.commit(call);return response({},503);};await c.start(fields(),destinations().slice(0,1),()=>true);}
+async function failed(f,c){f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?response({code:'42501'},403):null;await c.start(fields(),destinations().slice(0,1),()=>true);}
+async function uncertain(f,c,commit=false){f.state.override=call=>{if(!(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal')))return null;if(commit)f.commit(call);return response({},503);};await c.start(fields(),destinations().slice(0,1),()=>true);}
 let passed=0;const test=async(label,fn)=>{await fn();passed++;console.log('PASS '+label);};
 
 (async()=>{
@@ -38,7 +38,7 @@ let passed=0;const test=async(label,fn)=>{await fn();passed++;console.log('PASS 
  });
  await test('Mixed confirmed/uncertain results survive archive and restart; checking old receipts never resends',async()=>{
   const store=storage(),f=model({storage:store}),c=await f.coordinator();
-  f.state.override=call=>{if(call.url.pathname.endsWith('/save_group_visit_destination')){f.commit(call);return response({},503);}return null;};
+  f.state.override=call=>{if((call.url.pathname.endsWith('/save_group_visit_destination') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'group'))){f.commit(call);return response({},503);}return null;};
   await c.start(fields(),destinations().slice(0,2),()=>true);assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','uncertain']);
   await c.startSeparate(c.state,()=>true);assert.equal(c.state.previous[0].attempts.map(a=>a.status).join(','),'saved,uncertain');
   assert(c.state.previous[0].attempts[0].result);const bytes=store.values.get(archive);
@@ -102,7 +102,7 @@ let passed=0;const test=async(label,fn)=>{await fn();passed++;console.log('PASS 
   const task=handler();await handler();await h.r.settle();assert(h.coordinator.state.busy);assert(f.rt.attemptRemoval({type:'GO_BACK'}));await h.r.settle();
   assert(textOf(h.r.output).includes('Save in progress'));assert(!has(h.r,'Leave Anyway'));store.holdArchive.resolve();await task;await h.r.settle();
   assert.equal(JSON.parse(store.values.get(archive)).length,1);assert.equal(posts(f).length,1);h.r.unmount();
-  const other=model({storage:storage()}),c=await other.coordinator(),gate=defer();other.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+  const other=model({storage:storage()}),c=await other.coordinator(),gate=defer();other.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
   const pending=c.start(fields(),destinations().slice(0,1),()=>true);await new Promise(r=>setImmediate(r));
   assert.equal(await c.startSeparate(c.state,()=>true),'stale');gate.resolve(response({},503));await pending;
  });

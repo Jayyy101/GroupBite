@@ -9,7 +9,7 @@ import { accountAccessToken } from "@/lib/account-session";
 import { getPersonalPlace } from "@/lib/personal-places";
 import { withRequestDeadline } from "@/lib/request-deadline";
 import { isUuid } from "@/lib/restaurant-ui";
-import { destinationHref } from "@/lib/restaurant-navigation";
+import { detailOrigin, destinationHref, savedDestinationHref } from "@/lib/restaurant-navigation";
 import { isConfirmedAdd } from "@/lib/unified-add";
 import { supabase } from "@/lib/supabase";
 import type { AddFields, Destination } from "@/lib/unified-add";
@@ -27,11 +27,11 @@ export function localToday(now = new Date()) {
 }
 export default function UnifiedAddFormScreen() {
     const { session } = useAuth();
-    const params = useLocalSearchParams<{ groupId?: string; restaurantId?: string; personalId?: string }>();
+    const params = useLocalSearchParams<{ groupId?: string; restaurantId?: string; personalId?: string; fromHome?: string; fromMap?: string; fromAdd?: string }>();
     return session ? <UnifiedAddForm key={`${session.user.id}:${JSON.stringify(params)}`} userId={session.user.id} params={params} />
         : <PersonalAccess title="Add">{() => null}</PersonalAccess>;
 }
-function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?: string; restaurantId?: string; personalId?: string } }) {
+function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?: string; restaurantId?: string; personalId?: string; fromHome?: string; fromMap?: string; fromAdd?: string } }) {
     const router = useRouter(), { coordinator, state } = useUnifiedAdd(), { session, loading: authLoading } = useAuth();
     const focused = useIsFocused(), { isActive, version } = useForegroundRefresh();
     const [initial] = useState<AddFields>(() => ({ restaurant: state.restaurant ?? { name: "", address: "", cuisine: null },
@@ -130,7 +130,7 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
             if (results.length === 1 && results[0].status === "saved" && results[0].result?.available) {
                 const result = results[0].result;
                 departed.current = true;
-                leave.finish(() => { router.dismissTo(destinationHref(result), { withAnchor: true }); void coordinator.clearConfirmed(); });
+                leave.finish(() => { router.dismissTo(savedDestinationHref(result, fields.restaurant, detailOrigin(params)), { withAnchor: true }); void coordinator.clearConfirmed(); });
             } else if (results.length) { departed.current = true; leave.finish(() => router.dismissTo("/add", { withAnchor: true })); }
         } catch (error) { if (canOperate()) setError(error instanceof Error ? error.message : "Check your restaurant and visit details."); }
     }
@@ -159,7 +159,7 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
             }}
             open={result => leave.finish(() => {
                 departed.current = true;
-                router.dismissTo(destinationHref(result, true), { withAnchor: true });
+                router.dismissTo(destinationHref(result, "add"), { withAnchor: true });
             })}
             done={async () => {
                 if (isConfirmedAdd(coordinator.state)) {

@@ -57,11 +57,11 @@ function tabPress(r, h, name) {
         const tabs = nodes(r.output).find(n => n.type === 'Tabs');
         assert.equal(nodes(r.output).find(n => n.type === 'KeyboardAvoidingView').props.behavior, 'padding');
         assert.deepEqual(nodes(r.output).filter(n => n.type === 'TabScreen').map(n => n.props.options.title), ['Home', 'My Places', 'Add', 'Groups', 'Account']);
-        assert(tabs.props.screenOptions({ route: { name: 'index' } }).popToTopOnBlur);
-        assert.equal(tabs.props.screenOptions({ route: { name: 'index' } }).tabBarHideOnKeyboard, false);
+        assert(tabs.props.screenOptions({ route: { name: '(home)' } }).popToTopOnBlur);
+        assert.equal(tabs.props.screenOptions({ route: { name: '(home)' } }).tabBarHideOnKeyboard, false);
         for (const [path, section, root] of [['/personal-place/a', '(my-places)', 'my-places'], ['/group/a/restaurant/b', '(groups)', 'groups'], ['/place/a', '(account)', 'account']]) {
             const h = history(path); h.select(section); assert.equal(h.current().name, root);
-            h.router.push(path, { withAnchor: true }); h.select('index'); h.select(section); assert.equal(h.current().name, root);
+            h.router.push(path, { withAnchor: true }); h.select('(home)'); h.select(section); assert.equal(h.current().name, root);
         }
         r.unmount();
     });
@@ -129,6 +129,57 @@ function tabPress(r, h, name) {
             assert.equal(h.chain()[2].name,'add');assert.equal(h.current().name,'index');r.unmount();
         }
     });
+    await test('Home recent/history and group-preview browsing use Home for both custom and native Back', async () => {
+        for (const kind of ['personal','group']) for (const nativeBack of [false,true]) {
+            const h=history('/group/'+otherGroupId);h.select('(home)');
+            const homeKey=h.current().key;
+            const href=kind==='personal'?{pathname:'/home/personal-place/[id]',params:{id:fixture().id}}
+                :{pathname:'/home/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}};
+            h.router.push(href,{withAnchor:true});
+            const rt=runtime({router:h.router,...(kind==='group'?{fetch:restaurantBackend}:{})});
+            rt.world.rows=[fixture()];rt.world.params=href.params;
+            const r=screen(rt,kind==='personal'?'home/personal-place/[id]':'home/group/[id]/restaurant/[entryId]');await r.settle();
+            assert.equal(h.chain()[2].name,'(home)');
+            if(nativeBack)h.router.back();else await click(r,'Back');
+            assert.equal(h.current().key,homeKey);assert.equal(h.current().name,'index');r.unmount();
+        }
+        const h=history('/'),root=h.current().key;
+        h.router.push({pathname:'/home/group/[id]',params:{id:groupId}},{withAnchor:true});
+        const rt=runtime({router:h.router,fetch:groupBackend,mocks:clipboard});rt.world.params={id:groupId};
+        const group=screen(rt,'home/group/[id]');await group.settle();
+        const card=nodes(group.output).find(n=>n.type==='Pressable'&&nodes(n).some(v=>v.type==='Text'&&textOf(v)==='Cafe'));
+        assert(card,'Home group preview has a restaurant card');await card.props.onPress();await group.settle();
+        assert.equal(h.current().name,'home/group/[id]/restaurant/[entryId]');
+        rt.world.params={id:groupId,entryId};const restaurant=screen(rt,'home/group/[id]/restaurant/[entryId]');await restaurant.settle();
+        await click(restaurant,'Back');assert.equal(h.current().name,'home/group/[id]');
+        await click(group,'Back');assert.equal(h.current().key,root);restaurant.unmount();group.unmount();
+    });
+    await test('Home and collection map histories retain the same map route beneath details and editors', async () => {
+        const rt=runtime(),nav=rt.load('@/lib/restaurant-navigation');
+        for(const origin of ['home','map'])for(const kind of ['personal','group']) {
+            const h=history(origin==='home'?'/':'/my-places');
+            h.router.push(origin==='home'?'/home/saved-map':'/saved-map',{withAnchor:true});const mapKey=h.current().key;
+            const result={destination_kind:kind,group_id:kind==='group'?groupId:null,entry_id:fixture().id,visit_id:null,available:true};
+            const detail=nav.destinationHref(result,origin);h.router.push(detail);const detailKey=h.current().key;
+            if(kind==='personal')for(const editor of ['personal-place-form','personal-visit-form']) {
+                h.router.push({pathname:'/'+editor,params:{id:fixture().id,...nav.detailOriginParams(origin)}});
+                h.router.dismissTo(nav.personalPlaceHref(fixture().id,origin),{withAnchor:true});
+                assert.equal(h.current().key,detailKey);assert(!h.allNames().includes(editor));
+            }
+            h.router.back();assert.equal(h.current().key,mapKey);h.router.back();
+            assert.equal(h.current().name,origin==='home'?'index':'my-places');
+        }
+    });
+    await test("Every explicit tab press opens its root without reviving another tab's prior detail", async () => {
+        const rt=runtime(),r=screen(rt,'(app)/(tabs)/_layout');await r.settle();
+        for(const [path,target,root] of [['/home/group/a','(home)','index'],['/personal-place/a','(my-places)','my-places'],['/add/personal-place/a','add','index'],['/group/a/restaurant/b','(groups)','groups'],['/place/a','(account)','account']]) {
+            for(const selected of [true,false]) {
+                const h=history(path);if(!selected)h.dispatch({type:'JUMP_TO',payload:{name:target==='(home)'?'(my-places)':'(home)'},target:h.tabState().key});
+                assert(tabPress(r,h,target));await r.settle();
+                assert.equal(h.chain()[2].name,target);assert.equal(h.current().name,root);
+            }
+        }r.unmount();
+    });
     await test('Normal detail Back returns to My Places or its own group after browsing another group', async () => {
         for (const kind of ['personal','group']) {
             const h=history('/group/'+otherGroupId);
@@ -139,24 +190,26 @@ function tabPress(r, h, name) {
             assert.equal(h.current().name,kind==='personal'?'my-places':'group/[id]');if(kind==='group')assert.equal(h.current().params.id,groupId);r.unmount();
         }
     });
-    await test('Result-opened group edits keep dirty-form protection for both Back and native removal', async () => {
-        const h=history('/add');h.router.push({pathname:'/add/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}});
-        let rt;rt=runtime({fetch:restaurantBackend,router:{...h.router,back:()=>rt.attemptRemoval({type:'POP'},h.router.back)}});
-        rt.world.params={id:groupId,entryId};const r=screen(rt,'add/group/[id]/restaurant/[entryId]');await r.settle();
+    await test('Shared Home, map and Add details preserve inline dirty/native-removal protection', async () => {
+        for(const origin of ['add','home','map']) {
+        const h=history(origin==='add'?'/add':origin==='home'?'/':'/saved-map');h.router.push({pathname:'/'+origin+'/group/[id]/restaurant/[entryId]',params:{id:groupId,entryId}});
+        let rt;rt=runtime({development:true,mocks:{'@/components/group-apple-place-lookup':{default:()=>null}},fetch:restaurantBackend,router:{...h.router,back:()=>rt.attemptRemoval({type:'POP'},h.router.back)}});
+        rt.world.params={id:groupId,entryId};const r=screen(rt,origin+'/group/[id]/restaurant/[entryId]');await r.settle();
         await click(r,'Edit Visit');await enter(r,'Edit visit notes','Unsent change');await click(r,'Back');
         assert(textOf(r.output).includes('Discard unsaved changes?'));await click(r,'Stay');assert.equal(h.current().params.entryId,entryId);
         assert(rt.attemptRemoval({type:'POP'},h.router.back));await r.settle();await click(r,'Stay');
-        assert.equal(h.chain()[2].name,'add');assert.equal(rt.world.requests.filter(c=>/(update|delete)_group_visit$/.test(c.url.pathname)).length,0);r.unmount();
+        assert.equal(h.chain()[2].name,origin==='home'?'(home)':origin==='map'?'(my-places)':'add');assert.equal(rt.world.requests.filter(c=>/(update|delete)_group_visit$/.test(c.url.pathname)).length,0);r.unmount();
+        }
     });
-    await test('Personal facts and visit editors retain the Saved-summary return path', async () => {
-        for (const editor of ['personal-place-form','personal-visit-form']) {
-            const h=history('/add');h.router.push({pathname:'/add/personal-place/[id]',params:{id:fixture().id}});
-            const rt=runtime({router:h.router});rt.world.params={id:fixture().id};rt.world.rows=[fixture()];
+    await test('Personal facts and visit editors retain Home, map and Add return history', async () => {
+        for(const origin of ['add','home','map']) for (const editor of ['personal-place-form','personal-visit-form']) {
+            const h=history(origin==='add'?'/add':origin==='home'?'/':'/saved-map');h.router.push({pathname:'/'+origin+'/personal-place/[id]',params:{id:fixture().id}});
+            const rt=runtime({router:h.router,development:true,mocks:{'@/components/personal-apple-place-lookup':{default:()=>null},'@/components/dev-personal-location-repair':{default:()=>null}}});rt.world.params={id:fixture().id};rt.world.rows=[fixture()];
             rt.world.visits=[{id:entryId,personal_place_id:fixture().id,owner_user_id:'a',revision:1,origin:'visit',visited_on:null,rating:null,would_go_again:null,notes:'Original'}];
-            const details=screen(rt,'add/personal-place/[id]');await details.settle();await click(details,editor==='personal-place-form'?'Edit Personal Place':'Edit Visit');
-            assert.equal(h.current().params.fromAdd,'1');rt.world.params=h.current().params;details.unmount();
+            const details=screen(rt,origin+'/personal-place/[id]');await details.settle();await click(details,editor==='personal-place-form'?'Edit Personal Place':'Edit Visit');
+            assert.equal(h.current().params[origin==='home'?'fromHome':origin==='map'?'fromMap':'fromAdd'],'1');rt.world.params=h.current().params;details.unmount();
             const r=screen(rt,editor);await r.settle();await click(r,'Back');
-            assert.equal(h.chain()[2].name,'add');assert.equal(h.current().name,'personal-place/[id]');h.router.back();assert.equal(h.current().name,'index');r.unmount();
+            assert.equal(h.chain()[2].name,origin==='home'?'(home)':origin==='map'?'(my-places)':'add');assert.equal(h.current().name,origin==='home'?'home/personal-place/[id]':origin==='map'?'map/personal-place/[id]':'personal-place/[id]');h.router.back();assert.equal(h.current().name,origin==='map'?'saved-map':'index');r.unmount();
         }
     });
     function assertScaffold(r, insets, hasBack, edgeToEdge = false) {
@@ -275,8 +328,7 @@ function tabPress(r, h, name) {
                 if (state === 'error') assert(textOf(r.output).includes('Could not verify group access'));
                 await click(r, 'Back');
                 const fallback = ['invalid', 'restoring', 'signed-out'].includes(state);
-                assert.deepEqual(JSON.parse(JSON.stringify(rt.world.navigation.at(-1))), route === 'group/[id]' || fallback
-                    ? '/groups' : { pathname: '/group/[id]', params: { id: groupId } });
+                assert.deepEqual(JSON.parse(JSON.stringify(rt.world.navigation.at(-1))), fallback ? '/groups' : 'BACK');
                 r.unmount();
             }
         }
@@ -335,13 +387,9 @@ function tabPress(r, h, name) {
             const scroll = assertScaffold(r, insets, false);
             assert.equal(scroll.props.keyboardShouldPersistTaps, ['groups','add'].includes(route) ? 'handled' : undefined);
             if (route === 'index') {
-                assert(textOf(r.output).includes('Welcome to GroupBite'));
-                assert(textOf(r.output).includes('Your restaurants and visits'));
-                assert(textOf(r.output).includes('My Places keeps your private memories. Groups holds the visits you share with friends.'));
-                assert.deepEqual(nodes(r.output).filter(n => n.type === 'Pressable').map(textOf), ['My Places', 'Groups']);
-                for (const [label, path] of [['My Places', '/my-places'], ['Groups', '/groups']]) {
-                    await click(r, label); assert.equal(rt.world.navigation.at(-1), path);
-                }
+                for (const label of ['Welcome back!', 'Your food memories', 'Recent saves', 'Your groups']) assert(textOf(r.output).includes(label));
+                assert(button(r, 'Refresh dashboard'));
+                await click(r, 'View all groups'); assert.equal(rt.world.navigation.at(-1), '/groups');
             }
             r.unmount();
         }
@@ -368,7 +416,7 @@ function tabPress(r, h, name) {
         assert.equal(flatten(button(r, 'Back').props.style).opacity, undefined, 'Busy Back remains legible without whole-button opacity');
         pending.resolve(response({ code: '22023', message: 'Rejected for test' }, 400)); await saving; await r.settle();
         assert.equal(button(r, 'Back').props.disabled, false);
-        await click(r, 'Back'); assert.equal(rt.world.navigation.at(-1), '/groups'); r.unmount();
+        await click(r, 'Back'); assert.equal(rt.world.navigation.at(-1), 'BACK'); r.unmount();
     });
     await test('Disclosure cards keep full-card navigation and unrestricted metadata wrapping', async () => {
         for (const route of ['groups', 'group/[id]', 'my-places']) {
@@ -399,7 +447,7 @@ function tabPress(r, h, name) {
     await test('Stationary restaurant Back preserves inline dirty/swipe guards and active-save disabling', async () => {
         let rt; const pending = defer();
         rt = runtime({ platform: 'ios', fetch: c => c.url.pathname.endsWith('/update_group_visit') ? pending.promise : restaurantBackend(c),
-            router: { dismissTo: href => rt.attemptRemoval({ type: 'BACK', payload: href }, () => rt.world.navigation.push(href)) },
+            router: { canGoBack: () => true, back: () => rt.attemptRemoval({ type: 'BACK' }, () => rt.world.navigation.push('BACK')) },
         });
         rt.world.params = { id: groupId, entryId };
         const r = screen(rt, 'group/[id]/restaurant/[entryId]'); await r.settle();
@@ -475,7 +523,7 @@ function tabPress(r, h, name) {
             } else await click(r, exit);
             assert.equal(h.current().name, 'groups'); assert(!nodes(r.output).some(n => n.type === 'Modal'));
             assert.equal(rt.world.requests.filter(c => c.method !== 'GET').length, exit === 'save' ? 1 : 0);
-            assert.equal(tabPress(r, h, 'index'), false); h.select('(groups)');
+            assert.equal(tabPress(r, h, '(home)'), true); h.select('(groups)');
             await click(r, 'Dinner Owner'); assert.equal(h.current().params.id, groupId);
             r.unmount();
         }
@@ -554,7 +602,7 @@ function tabPress(r, h, name) {
         }
     });
     await test('Uncertain creation exits retain identity on Groups and rearm tab switch/reselect warnings', async () => {
-        for (const exit of ['Back', 'Cancel', 'native', 'Review Groups After Creation']) for (const target of ['index', '(groups)']) {
+        for (const exit of ['Back', 'Cancel', 'native', 'Review Groups After Creation']) for (const target of ['(home)', '(groups)']) {
             const { h, rt, r, creation } = await groupsFlow(call => call.url.pathname.endsWith('/create_group')
                 ? response({ message: 'Lost creation response' }, 503) : backend(call));
             await click(r, 'Create a Group'); await enter(r, 'New group name', 'Unconfirmed dinner');
@@ -575,7 +623,7 @@ function tabPress(r, h, name) {
             for (let i = 0; i < 2; i++) {
                 assert(tabPress(r, h, target)); await r.settle(); assert(textOf(r.output).includes('Review this save before leaving'));
                 await click(r, 'Leave Anyway'); assert.equal(creation().attempt, attempt);
-                if (target === 'index') { rt.world.focused = false; r.dirty = true; await r.settle(); h.select('(groups)'); rt.world.focused = true; r.dirty = true; await r.settle(); }
+                if (target === '(home)') { rt.world.focused = false; r.dirty = true; await r.settle(); h.select('(groups)'); rt.world.focused = true; r.dirty = true; await r.settle(); }
             }
             await click(r, 'Create a Group'); await click(r, 'Leave Anyway');
             assert.equal(h.current().name, 'create-group'); assert(button(r, 'Create Group').props.disabled);
@@ -651,7 +699,7 @@ function tabPress(r, h, name) {
                 onCancel() { canceled++; }, onBusyChange() {}, onComplete() { completed++; } } }; }
             rt.world.tabsScreen = Editor; const r = screen(rt, '(app)/(tabs)/_layout'); await r.settle();
             if (action === 'edit') {
-                await enter(r, 'Edit visit notes', 'Abandoned'); assert(tabPress(r, h, 'index')); await r.settle();
+                await enter(r, 'Edit visit notes', 'Abandoned'); assert(tabPress(r, h, '(home)')); await r.settle();
                 await click(r, 'Stay'); await click(r, 'Cancel'); await click(r, 'Discard'); assert.equal(canceled, 1); assert.equal(rt.world.requests.length, 0);
                 // Remount to represent the parent's onCancel closing the editor.
                 r.unmount(); const clean = screen(rt, '(app)/(tabs)/_layout'); await clean.settle(); clean.unmount();
@@ -660,12 +708,12 @@ function tabPress(r, h, name) {
             if (action === 'edit') await enter(edit, 'Edit visit notes', 'Edited');
             const staleSave = button(edit, action === 'edit' ? 'Save Changes' : 'Confirm Delete Visit').props.onPress;
             const pending = staleSave(); await edit.settle();
-            assert(tabPress(edit, h, 'index')); await edit.settle();
+            assert(tabPress(edit, h, '(home)')); await edit.settle();
             assert(textOf(edit.output).includes('Save in progress'));
             assert(!nodes(edit.output).some(n => n.type === 'Pressable' && textOf(n.props.children) === 'Discard'));
             await click(edit, 'Stay'); mutation.resolve(response({ message: 'Lost response' }, 503));
             await pending; await edit.settle(); assert(uncertain); await staleSave();
-            assert(tabPress(edit, h, 'index')); await edit.settle(); assert(textOf(edit.output).includes('Review this save'));
+            assert(tabPress(edit, h, '(home)')); await edit.settle(); assert(textOf(edit.output).includes('Review this save'));
             assert(!nodes(edit.output).some(n => n.type === 'Pressable' && textOf(n.props.children) === 'Discard'));
             await click(edit, 'Stay'); await click(edit, 'Check Saved Visit'); assert.equal(completed, 1);
             assert.equal(rt.world.requests.filter(c => /(?:update|delete)_group_visit$/.test(c.url.pathname)).length, 1); edit.unmount();

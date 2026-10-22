@@ -6,7 +6,7 @@ import { useLeaveGuard } from "@/hooks/use-leave-guard";
 import { getPersonalPlace, normalizePersonalPlace } from "@/lib/personal-places";
 import { listPersonalVisits, managePersonalVisit } from "@/lib/personal-visits";
 import { isUuid } from "@/lib/restaurant-ui";
-import { personalPlaceHref } from "@/lib/restaurant-navigation";
+import { detailOrigin, personalPlaceHref } from "@/lib/restaurant-navigation";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
 import type { PersonalVisit } from "@/types/database";
@@ -18,11 +18,11 @@ import { AppState, Pressable, Text } from "react-native";
 const memory = (v: VisitFieldsValue): VisitFieldsValue => ({ visited_on:v.visited_on, rating:v.rating, would_go_again:v.would_go_again, notes:v.notes });
 export default function PersonalVisitFormScreen() {
     const { session } = useAuth();
-    const params = useLocalSearchParams<{ id?: string; visitId?: string; action?: string; fromAdd?: string; fromMap?: string }>();
+    const params = useLocalSearchParams<{ id?: string; visitId?: string; action?: string; fromAdd?: string; fromMap?: string; fromHome?: string }>();
     return session ? <Editor key={`${session.user.id}:${JSON.stringify(params)}`} userId={session.user.id} {...params} />
         : <PersonalAccess title="Personal Visit">{() => null}</PersonalAccess>;
 }
-function Editor({ userId, id, visitId, action, fromAdd, fromMap }: { userId: string; id?: string; visitId?: string; action?: string; fromAdd?: string; fromMap?: string }) {
+function Editor({ userId, id, visitId, action, fromAdd, fromMap, fromHome }: { userId: string; id?: string; visitId?: string; action?: string; fromAdd?: string; fromMap?: string; fromHome?: string }) {
     const router = useRouter(), { session, loading: authLoading } = useAuth();
     const focused = useIsFocused(), { isActive, version } = useForegroundRefresh();
     const [visit,setVisit] = useState<PersonalVisit | null>(null), [fields,setFields] = useState<VisitFieldsValue>({ visited_on:null,rating:null,would_go_again:null,notes:null });
@@ -65,12 +65,12 @@ function Editor({ userId, id, visitId, action, fromAdd, fromMap }: { userId: str
     },[userId,id,visitId,action,focused,isActive,version,refresh]);
     function returnToPlace() {
         if(!canOperate()||pending.current)return;
-        leave.requestLeave(()=>isUuid(id)?router.dismissTo(personalPlaceHref(id,fromAdd==="1",fromMap==="1"),{withAnchor:true}):router.dismissTo("/my-places",{withAnchor:true}));
+        leave.requestLeave(()=>isUuid(id)?router.dismissTo(personalPlaceHref(id,detailOrigin({fromAdd,fromMap,fromHome})),{withAnchor:true}):router.dismissTo("/my-places",{withAnchor:true}));
     }
     function finish() {
         if(!canOperate()||!isUuid(id))return;
         completed.current=true;
-        leave.finish(()=>router.dismissTo(personalPlaceHref(id,fromAdd==="1",fromMap==="1"),{withAnchor:true}));
+        leave.finish(()=>router.dismissTo(personalPlaceHref(id,detailOrigin({fromAdd,fromMap,fromHome})),{withAnchor:true}));
     }
     async function save() {
         if(!canOperate()||!verified.current||!visit||loading||pending.current||locked.current)return;

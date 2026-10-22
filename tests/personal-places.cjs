@@ -170,7 +170,7 @@ function runtime(options = {}) {
         const base = path.join(root, name.replace(/^@\//, ''));
         const extensions = options.platform === 'ios' ? ['.ios.ts', '.ios.tsx', '.ts', '.tsx'] : ['.ts', '.tsx'];
         const route = name.startsWith('app/') ? name.slice(4) : null;
-        const file = [base, ...(route ? [path.join(root, 'app/(app)/(tabs)', route), ...['(my-places)', '(groups)', '(account)'].map(group => path.join(root, 'app/(app)/(tabs)', group, route)), path.join(root, 'app/(app)', route)] : [])]
+        const file = [base, ...(route ? [path.join(root, 'app/(app)/(tabs)', route), ...['(home)', '(my-places)', '(groups)', '(account)'].map(group => path.join(root, 'app/(app)/(tabs)', group, route)), path.join(root, 'app/(app)', route)] : [])]
             .flatMap(base => [base, path.join(base, 'index')])
             .flatMap(base => extensions.map(ext => base + ext)).find(file => fs.existsSync(file));
         assert(file, 'Unexpected import ' + name);

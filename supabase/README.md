@@ -1,7 +1,15 @@
-> Current hosted baseline: **migrations 1–17 applied and verified** on GroupBite.
+> Current hosted baseline: **migrations 1–19 applied and verified** on GroupBite.
 > See the [Milestone 18 completion review](../docs/milestone-18-completion.md).
 > Earlier milestone sections preserve their original deployment instructions and
 > evidence; they are not instructions to reapply deployed SQL.
+
+Migration 19 (Phase E visit-event provenance) was deployed once on October 22, 2026,
+with atomic history registration and verified RLS/grants/schema-cache behavior.
+Scoped hosted acceptance verified three new destination visits across two explicit
+events; historical unlinked visits and immutable receipts remain unchanged.
+See the [Phase E contract, deployment evidence and acceptance](../docs/phase-e-home-dashboard.md).
+Do not reapply migrations or run fixture suites against hosted data. New hosted
+changes always require separate authorization.
 
 # Milestone 8 setup
 

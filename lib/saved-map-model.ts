@@ -1,3 +1,4 @@
+import { destinationHref, type DetailOrigin } from "@/lib/restaurant-navigation";
 import type { MapCoordinate, MapRegion, MapRestaurant, MapSource } from "@/types/saved-map";
 
 const normalized = (value: string) => value.normalize("NFC").trim().replace(/\s+/g, " ").toLowerCase();
@@ -18,7 +19,7 @@ function rawAddress(value: string) {
     return [parts[0], parts.length === 3 ? match[1] : parts[1], match[parts.length === 3 ? 2 : 1],
         match[parts.length === 3 ? 3 : 2].replace(/\s/g, ""), code];
 }
-function addressKey(source: MapSource) {
+export function savedRestaurantAddressKey(source: MapSource) {
     const s = source.structured;
     const structured = s?.street && s.city && s.region && s.postal_code && s.country_code
         ? [s.street, s.city, s.region, s.postal_code.replace(/\s/g, ""), s.country_code].map(normalized) : null;
@@ -43,7 +44,7 @@ function compatibleCoordinates(sources: MapSource[]) {
 // Opaque Apple IDs are exact; ID-less copies cannot bridge conflicting IDs.
 export function groupMapRestaurants(sources: readonly MapSource[]): MapRestaurant[] {
     const sorted = [...sources].sort((a, b) => a.key.localeCompare(b.key));
-    const venue = (s: MapSource) => { const address = addressKey(s); return address ? JSON.stringify([normalized(s.name), address]) : null; };
+    const venue = (s: MapSource) => { const address = savedRestaurantAddressKey(s); return address ? JSON.stringify([normalized(s.name), address]) : null; };
     const byApple = new Map<string, MapSource[]>();
     const idsByVenue = new Map<string, Set<string>>();
     for (const s of sorted) {
@@ -91,8 +92,7 @@ export function inMapRegion(point: MapCoordinate, region: MapRegion) {
     return Math.abs(point.latitude - region.latitude) <= region.latitudeDelta / 2
         && Math.abs(longitude) <= region.longitudeDelta / 2;
 }
-export function mapSourceHref(source: MapSource) {
-    return source.kind === "personal"
-        ? { pathname: "/map/personal-place/[id]" as const, params: { id: source.entryId } }
-        : { pathname: "/map/group/[id]/restaurant/[entryId]" as const, params: { id: source.groupId!, entryId: source.entryId } };
+export function mapSourceHref(source: MapSource, origin: DetailOrigin = "map") {
+    return destinationHref({ destination_kind: source.kind, group_id: source.groupId,
+        entry_id: source.entryId, visit_id: null, available: true }, origin);
 }

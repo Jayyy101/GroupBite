@@ -1,3 +1,4 @@
+import { backToContext, destinationHref, type DetailOrigin } from "@/lib/restaurant-navigation";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { GroupMembershipConfirmation, type MembershipAction } from "@/components/group-membership-confirmation";
@@ -14,17 +15,17 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AppState, Pressable, ScrollView, Text, View } from "react-native";
 
-export default function GroupDetailScreen() {
+export default function GroupDetailScreen({ origin = "collection" }: { origin?: DetailOrigin }) {
     const router = useRouter();
     const { id } = useLocalSearchParams<{ id?: string | string[] }>();
     const { session, loading } = useAuth();
     const validId = typeof id === "string" && /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id);
 
     if (!loading && session && validId) {
-        return <GroupDetails key={`${session.user.id}:${id}`} groupId={id} userId={session.user.id} />;
+        return <GroupDetails key={`${session.user.id}:${id}`} groupId={id} userId={session.user.id} origin={origin} />;
     }
     return (
-        <ScreenScaffold edgeToEdge title="Group" onBack={() => router.dismissTo("/groups")}>
+        <ScreenScaffold edgeToEdge title="Group" onBack={() => backToContext(router, origin === "home" ? "/" : "/groups")}>
             <Text style={styles.message}>
                 {loading ? "Restoring your session..." : !session ? "Sign in to view your groups." : "This group could not be found."}
             </Text>
@@ -32,7 +33,7 @@ export default function GroupDetailScreen() {
     );
 }
 
-function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) {
+function GroupDetails({ groupId, userId, origin }: { groupId: string; userId: string; origin: DetailOrigin }) {
     const router = useRouter();
     const [members, setMembers] = useState<GroupMember[]>([]);
     const [targets, setTargets] = useState<GroupMembershipTarget[]>([]);
@@ -281,7 +282,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
     const hasActiveInvite = inviteExpires !== undefined && (inviteExpires === null || new Date(inviteExpires).getTime() > Date.now());
 
     return (
-        <ScreenScaffold edgeToEdge title={group?.name ?? "Group"} scrollRef={scroll} busy={busy} onBack={() => router.dismissTo("/groups")}>
+        <ScreenScaffold edgeToEdge title={group?.name ?? "Group"} scrollRef={scroll} busy={busy} onBack={() => backToContext(router, origin === "home" ? "/" : "/groups")}>
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
@@ -297,7 +298,7 @@ function GroupDetails({ groupId, userId }: { groupId: string; userId: string }) 
                     <Text style={styles.label}>Saved restaurants</Text>
                     {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Tap the Add tab at the bottom to save a visit.</Text>}
                     {restaurants.map(restaurant => (
-                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push({ pathname: "/group/[id]/restaurant/[entryId]", params: { id: groupId, entryId: restaurant.id } }, { withAnchor: true })} style={styles.card}>
+                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push(destinationHref({ destination_kind: "group", group_id: groupId, entry_id: restaurant.id, visit_id: null, available: true }, origin), { withAnchor: true })} style={styles.card}>
                             <View style={styles.cardBody}>
                                 <View style={styles.cardHeading}>
                                     <Text style={[styles.cardTitle, styles.cardHeadingText]}>{restaurant.name}</Text>

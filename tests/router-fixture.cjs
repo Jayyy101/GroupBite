@@ -48,7 +48,7 @@ module.exports = async function routing() {
         const routers = new Map(), nodes = new Map();
         const options = node => ({ routeNames: node.children.map(n => n.route), routeParamList: {}, routeGetIdList: {} });
         function hydrate(partial, node, params) {
-            const router = node.route === '(tabs)' ? TabRouter({ initialRouteName: 'index', backBehavior: 'history' }) : StackRouter({ initialRouteName: node.initialRouteName });
+            const router = node.route === '(tabs)' ? TabRouter({ initialRouteName: '(home)', backBehavior: 'history' }) : StackRouter({ initialRouteName: node.initialRouteName });
             let state = partial ? router.getRehydratedState(partial, options(node)) : params?.screen && params.initial !== false
                 ? router.getRehydratedState({ stale: true, routes: [{ name: params.screen, params: params.params }] }, options(node)) : router.getInitialState(options(node));
             routers.set(state.key, router); nodes.set(state.key, node);

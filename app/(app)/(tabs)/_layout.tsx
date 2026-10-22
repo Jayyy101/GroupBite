@@ -7,10 +7,10 @@ import { Tabs } from "expo-router";
 import { useRef, type ComponentProps } from "react";
 import { KeyboardAvoidingView, Platform } from "react-native";
 
-export const unstable_settings = { initialRouteName: "index" };
+export const unstable_settings = { initialRouteName: "(home)" };
 
 const icons: Record<string, ComponentProps<typeof Ionicons>["name"]> = {
-    index: "home-outline", "(my-places)": "bookmark-outline", add: "add-circle-outline",
+    "(home)": "home-outline", "(my-places)": "bookmark-outline", add: "add-circle-outline",
     "(groups)": "people-outline", "(account)": "person-circle-outline",
 };
 
@@ -19,16 +19,15 @@ export default function TabLayout() {
     const { coordinator } = useUnifiedAdd();
     return <TabLeaveContext.Provider value={leaveHandler}>
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-            <Tabs initialRouteName="index" backBehavior="history" screenListeners={({ navigation, route }) => ({
+            <Tabs initialRouteName="(home)" backBehavior="history" screenListeners={({ navigation, route }) => ({
                 tabPress: event => {
                     const select = async () => {
                         if (route.name === "add" && isConfirmedAdd(coordinator.state) && !await coordinator.clearConfirmed()) return;
                         selectTabRoot(navigation, route.key);
                     };
-                    if (leaveHandler.current) {
-                        event.preventDefault();
-                        leaveHandler.current(() => { void select(); });
-                    } else if (route.name === "add") { event.preventDefault(); void select(); }
+                    event.preventDefault();
+                    if (leaveHandler.current) leaveHandler.current(() => { void select(); });
+                    else void select();
                 },
             })} screenOptions={({ route }) => ({
                 headerShown: false,
@@ -40,7 +39,7 @@ export default function TabLayout() {
                 tabBarHideOnKeyboard: false,
                 tabBarIcon: ({ color, size }) => <Ionicons name={icons[route.name]} color={color} size={size} />,
             })}>
-                <Tabs.Screen name="index" options={{ title: "Home" }} />
+                <Tabs.Screen name="(home)" options={{ title: "Home" }} />
                 <Tabs.Screen name="(my-places)" options={{ title: "My Places" }} />
                 <Tabs.Screen name="add" options={{ title: "Add" }} />
                 <Tabs.Screen name="(groups)" options={{ title: "Groups" }} />

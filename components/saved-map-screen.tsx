@@ -1,3 +1,4 @@
+import { backToContext, type DetailOrigin } from "@/lib/restaurant-navigation";
 import SavedMapCanvas from "@/components/saved-map-canvas";
 import SavedMapPanel from "@/components/saved-map-panel";
 import type { MapPanelState } from "@/lib/saved-map-panel";
@@ -11,7 +12,7 @@ import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { ActivityIndicator, AppState, FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-export default function SavedMapScreen({ userId, fromHome = false }: { userId: string; fromHome?: boolean }) {
+export default function SavedMapScreen({ userId, origin = "map" }: { userId: string; origin?: DetailOrigin }) {
     const router = useRouter(), insets = useSafeAreaInsets(), map = useRef<MapCanvasHandle>(null);
     const list = useRef<FlatList<MapRestaurant>>(null);
     const read = useSavedMap(userId);
@@ -117,7 +118,7 @@ export default function SavedMapScreen({ userId, fromHome = false }: { userId: s
                     const facts = [stats?.visitCount != null ? `${stats.visitCount} ${stats.visitCount === 1 ? "visit" : "visits"}` : null,
                         stats?.rating != null ? `${stats.ratingKind === "latest" ? "Latest rating" : "Avg rating"} ${Number(stats.rating.toFixed(1))}/5` : null].filter(Boolean).join(" · ");
                     return <Pressable key={source.key} accessibilityRole="button" accessibilityLabel={`Open ${restaurant.name} in ${source.label}`}
-                        onPress={() => { if (eligible.current && read.data && visibleData.current === read.data) router.push(mapSourceHref(source)); }} style={({ pressed }) => [s.source, pressed && s.pressed]}>
+                        onPress={() => { if (eligible.current && read.data && visibleData.current === read.data) router.push(mapSourceHref(source, origin)); }} style={({ pressed }) => [s.source, pressed && s.pressed]}>
                         <Ionicons name={source.kind === "personal" ? "lock-closed-outline" : "people-outline"} size={18} color="#A33720" accessible={false} />
                         <View style={s.rowBody}><Text style={s.sourceText}>{source.label}</Text>{!!facts && <Text style={s.caption}>{facts}</Text>}</View>
                         <Ionicons name="chevron-forward" size={17} color="#A33720" accessible={false} />
@@ -133,7 +134,7 @@ export default function SavedMapScreen({ userId, fromHome = false }: { userId: s
             onRegion={value => { camera.current = value; setViewport(value); }} />}
         <View style={[s.top, { top: insets.top + 6 }]} pointerEvents="box-none" onLayout={e => setTopHeight(e.nativeEvent.layout.height)}>
             <View style={s.heading}>
-                {button("Back", "chevron-back", () => fromHome ? router.navigate("/") : router.canGoBack() ? router.back() : router.replace("/my-places"))}
+                {button("Back", "chevron-back", () => backToContext(router, origin === "home" ? "/" : "/my-places"))}
                 <Text numberOfLines={1} maxFontSizeMultiplier={1.4} adjustsFontSizeToFit style={s.title}>Saved Map</Text>
                 {button("Refresh saved map", "refresh", read.refresh, read.loading)}
             </View>

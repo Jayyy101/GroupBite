@@ -110,7 +110,7 @@ function deadlines() {
             await pending; await f.r.settle(); assert.equal(f.rt.world.navigation.length, 0);
             await resume(f.rt, f.r); assert(button(f.r, 'Check Saved Visit')); await submit(); assert.equal(mutations(f.rt).length, 1);
             await click(f.r, 'Check Saved Visit'); assert.equal(mutations(f.rt).length, 1);
-            if (action === 'delete') assert.equal(f.rt.world.navigation.at(-1).pathname, '/group/[id]');
+            if (action === 'delete') assert.equal(f.rt.world.navigation.at(-1), 'BACK');
             else assert(textOf(f.r.output).includes('Visit updated.'));
             assert(f.rt.world.requests.filter(c => c.url.pathname.includes('/rpc/')).every(c => c.user === 'a'));
             assert.equal(f.rt.world.lateUpdates, 0); f.r.unmount();

@@ -16,12 +16,17 @@ Token refresh for the same account does not reset navigation.
 `(app)` and `(tabs)` are URL-free route groups. Existing paths such as
 `/my-places`, `/add-visit`, `/group/:id`, and `/personal-place/:id` still work.
 Home, My Places, Add, Groups and Account remain the same styled JavaScript
-Expo Router tabs. My Places, Add, Groups and Account each contain a native Stack:
+Expo Router tabs. Each tab contains a native Stack, including Home browsing:
 
 ```text
 (app)/
   (tabs)/
-    index.tsx                         Home
+    (home)/_layout.tsx                 initialRouteName: index
+      index.tsx                      Dashboard
+      home/personal-place/[id].tsx
+      home/group/[id].tsx
+      home/group/[id]/restaurant/[entryId].tsx
+      home/saved-map.tsx                         Home
     add/_layout.tsx                   Add Stack; clean root /add
       index.tsx                       landing, Saved and previous recovery
       personal-place/[id].tsx          result-origin personal detail
@@ -46,8 +51,9 @@ Expo Router tabs. My Places, Add, Groups and Account each contain a native Stack
 ```
 
 All designated details, visit histories and archive browsing retain the tabs.
-`popToTopOnBlur` resets a section when leaving it; Expo Router's native-stack
-`tabPress` listener pops an already-selected tab to its root. Tabs stay visible
+Every tab press uses the shared `selectTabRoot` native pop/jump actions after the
+focused leave guard approves, including reselect. `popToTopOnBlur` also resets a
+section when leaving it. Tabs stay visible
 above the keyboard for inline entry, with iOS keyboard avoidance around Tabs. Stack `initialRouteName` anchors external
 links, and `withAnchor: true` anchors programmatic detail/save entry. Route groups
 add no URL segments or collisions. Native Back/swipe-back operates inside each
@@ -125,7 +131,9 @@ transaction; uncertain writes remain locked, ignore late results and never retry
 Milestone 18 replaces separate creation flows with the restaurant-first Add
 landing and one parent-stack visit form. Every destination starts unchecked.
 Single-destination success dismisses the form into the exact saved entry, with
-its tab root anchor. Multiple/partial results dismiss into the Add tab's recovery
+its tab root anchor. Add Another Visit from a Home/map detail returns to that
+existing detail when saving to the original destination; a different destination
+uses its own collection. Multiple/partial results dismiss into the Add tab's recovery
 summary, so the completed form is absent from Back history. The account-owned
 coordinator and minimal persistent journal keep destination outcomes reviewable;
 uncertain mutations are reconciled read-only. Personal facts and individual visit
@@ -304,3 +312,29 @@ recovery offers read-only receipt checks. Storage failure requires a second
 explicit temporary-recovery acknowledgement; it cannot bypass the journal-write
 requirement for new mutations. Leaving a recovery screen alone clears nothing.
 See the [recovery completion contract](milestone-18-recovery-completion.md).
+
+## Phase E browsing origin and Back consistency
+
+Home has its own small native stack, with thin aliases reusing the personal,
+group, group-restaurant and Saved Map screens. Home recent saves and group previews
+therefore retain the original Dashboard beneath them, including its scrolling and
+See more state. Group → restaurant → Back returns to that group; direct recent
+restaurant → Back returns to Home. The Home map shortcut uses `/home/saved-map`;
+My Places retains `/saved-map`. Opening either map's restaurant details and then
+Back retains the same mounted map, filter, selected restaurant, panel and camera.
+The old `fromHome=1` map link redirects to the Home stack rather than simulating
+cross-tab Back. Selecting another tab deliberately opens its root.
+
+`lib/restaurant-navigation.ts` centralizes the bounded browsing origin, internal
+links, editor flags, single-save destination matching and shared history-first
+Back. Route flags choose presentation history only; the reused account/membership
+checks remain authoritative. There are no arbitrary return URLs or note payloads.
+Personal facts/visit editors preserve Home, map, Add-summary or collection origin.
+Dirty, busy and uncertain protection and successful form removal still use the
+existing leave guard. New routes are explicitly allowlisted for authenticated
+return; account changes still discard the entire private route/provider tree.
+
+Focused regressions use the installed Expo route/action generation and React
+Navigation reducers, actual form/detail controllers, and offline failure/account
+fixtures. Native Back-action and visible-control checks use the existing simulator
+without new hosted saves. Physical edge-swipe and VoiceOver remain manual checks.

@@ -204,6 +204,17 @@ export type Database = {
             group_mapkit_locations: { Row: { group_restaurant_id: string; address_snapshot: string;
                 latitude: number; longitude: number; structured_address: MapKitAddress | null; created_at: string };
                 Insert: never; Update: never; Relationships: [] };
+            // Existing migration-8 tables: read types only, no new permissions.
+            personal_place_locations: { Row: {
+                personal_place_id: string; address_snapshot: string; resolution_status: "unresolved" | "resolved" | "failed" | "ambiguous";
+                standardized_address: string | null; resolution_accuracy: "address" | "building" | null;
+                latitude: number | null; longitude: number | null;
+            }; Insert: never; Update: never; Relationships: [] };
+            group_restaurant_locations: { Row: {
+                group_restaurant_id: string; address_snapshot: string; resolution_status: "unresolved" | "resolved" | "failed" | "ambiguous";
+                standardized_address: string | null; resolution_accuracy: "address" | "building" | null;
+                latitude: number | null; longitude: number | null;
+            }; Insert: never; Update: never; Relationships: [] };
             personal_visits: { Row: PersonalVisit; Insert: never; Update: never; Relationships: [] };
             personal_places: {
                 Row: PersonalPlace;
@@ -268,6 +279,11 @@ export type Database = {
         };
         Views: { [_ in never]: never };
         Functions: {
+            save_visit_event_destination: { Args: AddVisitArgs & { client_event_id: string; destination_kind: "personal" | "group";
+                target_group_id: string | null; expected_membership_id: string | null; selected_latitude: number | null;
+                selected_longitude: number | null; selected_address: MapKitAddress | null }; Returns: string };
+            get_my_visit_event_summary: { Args: Record<string, never>;
+                Returns: { linked_events: number; linked_records: number; unlinked_records: number }[] };
             save_personal_visit_with_mapkit_location: { Args: AddVisitArgs & { selected_latitude: number; selected_longitude: number;
                 selected_address: MapKitAddress | null }; Returns: string };
             save_group_visit_with_mapkit_location: { Args: AddVisitArgs & { target_group_id: string; expected_membership_id: string;

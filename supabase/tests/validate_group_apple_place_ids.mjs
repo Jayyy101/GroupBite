@@ -10,8 +10,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
-const structuredMapkit = args.at(-1) === '--structured-mapkit';
-if (structuredMapkit) args.pop();
+const visitEvents = args.at(-1) === '--visit-events';
+if (visitEvents) args.pop();
+const structuredMapkit = visitEvents || args.at(-1) === '--structured-mapkit';
+if (args.at(-1) === '--structured-mapkit') args.pop();
 const mapkitLocations = structuredMapkit || args.at(-1) === '--mapkit-locations';
 if (args.at(-1) === '--mapkit-locations') args.pop();
 const milestone18 = mapkitLocations || args.at(-1) === '--milestone18';
@@ -246,6 +248,31 @@ async function main() {
             await admin.query("select set_config('groupbite.local_validation',$1,false)",[marker]);
             await admin.query(await source('tests/'+suite));console.log('PASS post-migration-18 regression: '+suite);
         }
+    }
+    if (visitEvents) {
+        const tables = (await admin.query("select tablename from pg_tables where schemaname='public' order by tablename")).rows.map(r=>r.tablename);
+        const rows = async()=>Object.fromEntries(await Promise.all(tables.map(async table=>[table,
+            (await admin.query(`select to_jsonb(t) row from public.${table} t order by to_jsonb(t)::text`)).rows])));
+        const beforeRows=await rows();
+        const functions=(await admin.query("select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where pronamespace='public'::regnamespace and prokind='f' order by oid")).rows;
+        const access=async()=>(await admin.query("select oid,relacl::text,relrowsecurity,relforcerowsecurity from pg_class where oid=any($1::regclass[]) order by oid",[tables.map(t=>'public.'+t)])).rows;
+        const policies=async()=>(await admin.query("select * from pg_policies where schemaname='public' and tablename=any($1::text[]) order by tablename,policyname",[tables])).rows;
+        const beforeAccess=await access(),beforePolicies=await policies();
+        await admin.query(await source('migrations/20261022001900_visit_event_provenance.sql'));
+        assert.deepEqual(await rows(),beforeRows);assert.deepEqual(await access(),beforeAccess);assert.deepEqual(await policies(),beforePolicies);
+        assert.deepEqual((await admin.query('select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where oid=any($1::oid[]) order by oid',[functions.map(f=>f.oid)])).rows,functions);
+        assert.equal((await admin.query('select count(*)::int n from public.visit_events')).rows[0].n,0);
+        console.log('PASS migration 19 preserves all historical rows, RPCs, grants and policies; no inferred provenance');
+        await admin.query("select set_config('groupbite.local_validation','visit-events',false)");
+        await admin.query(await source('tests/visit_events.sql'));
+        assert.deepEqual(await rows(),beforeRows);
+        console.log('PASS visit-event SQL: atomic proof, private notes, legacy coverage, scoped totals and permissions');
+        await source('tests/visit_events_concurrency.mjs');
+        const {runVisitEventConcurrency}=await import('./visit_events_concurrency.mjs');
+        await runVisitEventConcurrency({admin,a,b,owner,other,member});
+        await admin.query("select set_config('groupbite.local_validation','m18-unified-add',false)");
+        await admin.query(await source('tests/unified_add.sql'));
+        console.log('PASS post-migration-19 legacy saves and recovery remain compatible');
     }
     for (const [file, hash] of hashes) assert.equal(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'), hash);
     console.log('PASS all migration/test input hashes unchanged during validation');

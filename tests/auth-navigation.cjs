@@ -194,7 +194,7 @@ function layoutRuntime() {
         const config = require('expo-router/build/getReactNavigationConfig').getReactNavigationConfig(tree, true);
         const { getStateFromPath } = routerModule('fork/getStateFromPath.js');
         const paths = ['/', '/my-places', '/add', '/groups', '/account', '/add-visit?groupId=a', '/personal-place-form?id=b',
-            '/personal-place/a', '/group/a', '/group/a/restaurant/b', '/saved-places', '/place/a', '/add-place?id=a', '/dev-map', '/dev-apple-search'];
+            '/personal-place/a', '/group/a', '/group/a/restaurant/b', '/saved-places', '/place/a', '/add-place?id=a', '/dev-map', '/dev-apple-search', '/home/personal-place/a', '/home/group/a', '/home/group/a/restaurant/b', '/home/saved-map'];
         for (const url of paths) {
             const state = getStateFromPath(url, config), app = state.routes.at(-1);
             assert.equal(app.name, '(app)', url); assert(app.state, url);
@@ -203,8 +203,8 @@ function layoutRuntime() {
         const appNode = tree.children.find(n => n.route === '(app)');
         assert.equal(appNode.children.find(n => n.route === '(tabs)').children.length, 5);
         // Exercise installed routing action selection across the new tab/stack boundary.
-        const stack = StackRouter({}), tab = TabRouter({ backBehavior: 'history', initialRouteName: 'index' });
-        const tabOptions = { routeNames: ['index', '(my-places)', 'add', '(groups)', '(account)'], routeParamList: {}, routeGetIdList: {} };
+        const stack = StackRouter({}), tab = TabRouter({ backBehavior: 'history', initialRouteName: '(home)' });
+        const tabOptions = { routeNames: ['(home)', '(my-places)', 'add', '(groups)', '(account)'], routeParamList: {}, routeGetIdList: {} };
         let tabState = tab.getInitialState(tabOptions);
         const appOptions = { routeNames: appNode.children.map(n => n.route), routeParamList: {}, routeGetIdList: {} };
         let appState = stack.getRehydratedState({ stale: true, routes: [{ name: '(tabs)', state: tabState }, { name: 'add-visit' }], index: 1 }, appOptions);
@@ -215,6 +215,12 @@ function layoutRuntime() {
         assert.equal(appState.routes.length, 1); assert.equal(appState.routes[0].name, '(tabs)');
         tabState = tab.getStateForAction(tabState, { type: 'NAVIGATE', payload: { name: action.payload.params.screen, params: action.payload.params.params } }, tabOptions);
         assert.equal(tabState.routes[tabState.index].name, '(groups)');
+    });
+    await test('Auth resumes only known Home browsing links and removes duplicate path parameters', () => {
+        const nav=runtime().load('@/lib/auth-navigation');
+        for(const path of ['/home/personal-place/a','/home/group/a','/home/group/a/restaurant/b','/home/saved-map'])assert.equal(nav.safeAuthReturnTo(path),path);
+        for(const path of ['/home/unknown','/home/group/a/manage','/home/../account','https://example.test/home/group/a'])assert.equal(nav.safeAuthReturnTo(path),'/');
+        assert.equal(nav.authReturnTo('/home/group/a/restaurant/b',{id:'a',entryId:'b'}),'/home/group/a/restaurant/b');
     });
     console.log(`${passed} offline authentication/navigation checks passed.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });

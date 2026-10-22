@@ -16,14 +16,14 @@ function model(options={}){
         memberships:[{group_id:ga,membership_id:ma},{group_id:gb,membership_id:mb}],cards:[],visits:[],points:[],receipts:new Map()};
     const uuid=()=>`00000000-0000-0000-0000-${String(sequence++).padStart(12,'0')}`;
     function commit(call){
-        const a=call.body,kind=/\/save_personal_visit(?:_with_mapkit_(?:point|location))?$/.test(call.url.pathname)?'personal':'group',scope=kind==='personal'?call.user:a.target_group_id;
+        const a=call.body,kind=a.destination_kind ?? (/\/save_personal_visit(?:_with_mapkit_(?:point|location))?$/.test(call.url.pathname)?'personal':'group'),scope=kind==='personal'?call.user:a.target_group_id;
         if(kind==='group'&&(call.user!=='a'||!state.memberships.some(m=>m.group_id===scope&&m.membership_id===a.expected_membership_id)))return response({code:'42501'},403);
         const key=call.user+':'+a.client_request_id,old=state.receipts.get(key);
         if(old)return old.payload===JSON.stringify(a)?response(old.entry_id):response({code:'22023'},400);
         let card=state.cards.find(c=>c.kind===kind&&c.scope===scope&&c.name===a.restaurant_name&&c.address===a.restaurant_address);
         if(!card){card={id:uuid(),kind,scope,name:a.restaurant_name,address:a.restaurant_address};state.cards.push(card);}
         const visit={id:uuid(),card:card.id,kind,scope,date:a.visit_date,rating:a.visit_rating,again:a.visit_would_go_again,notes:a.visit_notes};state.visits.push(visit);
-        if(/_with_mapkit_(?:point|location)$/.test(call.url.pathname)&&!state.points.some(p=>p.id===card.id))state.points.push({id:card.id,owner_user_id:kind==='personal'?call.user:null,group_id:kind==='group'?scope:null,structured_address:a.selected_address??null,
+        if((/_with_mapkit_(?:point|location)$/.test(call.url.pathname)||a.selected_latitude!=null)&&!state.points.some(p=>p.id===card.id))state.points.push({id:card.id,owner_user_id:kind==='personal'?call.user:null,group_id:kind==='group'?scope:null,structured_address:a.selected_address??null,
             name:card.name,address:card.address,latitude:a.selected_latitude,longitude:a.selected_longitude});
         state.receipts.set(key,{payload:JSON.stringify(a),destination_kind:kind,group_id:kind==='group'?scope:null,entry_id:card.id,visit_id:visit.id,available:true});
         return response(card.id);
@@ -34,7 +34,7 @@ function model(options={}){
         if(path==='/rest/v1/groups')return response(call.user==='a'?state.groups:[]);
         if(path==='/rest/v1/group_memberships')return response(call.user==='a'?state.memberships:[]);
         if(/\/get_recent_add_restaurants(?:_with_mapkit)?$/.test(path))return response(options.recent??[]);
-        if(/\/(save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(path))return commit(call);
+        if(/\/(save_visit_event_destination|save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(path))return commit(call);
         if(path.endsWith('/get_add_destination_result')){const r=state.receipts.get(call.user+':'+call.body.client_request_id);return response(r?[r]:[]);}
         if(path.endsWith('/get_saved_mapkit_location'))return response(state.points.find(p=>p.id===call.body.target_entry_id)??null);
         if(path.endsWith('/get_saved_locations'))return response([]);
@@ -51,7 +51,7 @@ const fields=()=>({restaurant:{name:' Cafe ',address:' 100 Main Street ',cuisine
     visited_on:'2026-10-17',rating:4,would_go_again:false,privateNotes:' PRIVATE ',groupNotes:' SHARED '});
 const destinations=()=>[{kind:'personal',label:'My Places'},{kind:'group',groupId:ga,membershipId:ma,label:'Dinner'},
     {kind:'group',groupId:gb,membershipId:mb,label:'Lunch'}];
-const posts=f=>f.rt.world.requests.filter(c=>/\/(save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(c.url.pathname));
+const posts=f=>f.rt.world.requests.filter(c=>/\/(save_visit_event_destination|save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(c.url.pathname));
 async function toggle(r,label){const item=nodes(r.output).find(n=>n.props?.accessibilityRole==='checkbox'&&textOf(n.props.children).trim().replace(/^✓ /,'')===label);assert(item,'Missing '+label);item.props.onPress();await r.settle();}
 async function fill(r){await enter(r,'Restaurant name','Cafe');await enter(r,'Restaurant address','100 Main Street');await enter(r,'Private notes','PRIVATE');await enter(r,'Group notes','SHARED');}
 const nativeRestaurant=(overrides={})=>({id:'1:0',name:'Native Cafe',address:'100 Native Street',placeId:'Native ID',latitude:37,longitude:-122,kind:'business',source:'apple-maps-preview',...overrides});
@@ -96,13 +96,13 @@ test('save','Partial rejection keeps confirmed successes and retries only the de
     assert.equal(posts(f).length,4);assert.deepEqual(posts(f)[3].body,body);assert.equal(f.state.visits.length,3);
 });
 for(const committed of [true,false])test('save',`Uncertain ${committed?'committed':'uncommitted'} save is never resent, including after later server rejection`,async()=>{
-    const f=model(),c=await f.coordinator();f.state.override=call=>{if(!call.url.pathname.endsWith('/save_personal_visit'))return null;if(committed)f.commit(call);return response({message:'Lost'},503);};
+    const f=model(),c=await f.coordinator();f.state.override=call=>{if(!(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal')))return null;if(committed)f.commit(call);return response({message:'Lost'},503);};
     await c.start(fields(),destinations().slice(0,1),()=>true);assert.equal(c.state.attempts[0].status,'uncertain');
     await c.sendPending(()=>true,c.state.attempts[0].requestId);assert.equal(posts(f).length,1);
     f.state.override=null;await c.reconcile(()=>true);assert.equal(c.state.attempts[0].status,committed?'saved':'uncertain');assert.equal(posts(f).length,1);
 });
 test('save','A local exception with a database-looking error code is uncertain',async()=>{
-    const f=model(),c=await f.coordinator();f.state.override=call=>{if(call.url.pathname.endsWith('/save_personal_visit'))throw Object.assign(new Error('local'),{code:'42501'});};
+    const f=model(),c=await f.coordinator();f.state.override=call=>{if((call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal')))throw Object.assign(new Error('local'),{code:'42501'});};
     await c.start(fields(),destinations().slice(0,1),()=>true);assert.equal(c.state.attempts[0].status,'uncertain');
 });
 test('save','Recovery markers restore after process loss using reads only, and missing/deleted/revoked results never recreate visits',async()=>{
@@ -113,7 +113,7 @@ test('save','Recovery markers restore after process loss using reads only, and m
     await restored.sendPending(()=>true);assert.equal(posts(f).length,3);
 });
 test('save','Recovery reader pins accounts and rejects malformed results without unlocking an uncertain submission',async()=>{
-    const f=model(),c=await f.coordinator();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?response({},503):null;
+    const f=model(),c=await f.coordinator();f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?response({},503):null;
     await c.start(fields(),destinations().slice(0,1),()=>true);
     f.state.override=call=>call.url.pathname.endsWith('/get_add_destination_result')?response([{destination_kind:'group',group_id:gb,entry_id:entry,visit_id:vid,available:true}]):null;
     await c.reconcile(()=>true);assert.equal(c.state.attempts[0].status,'uncertain');
@@ -125,7 +125,7 @@ test('save','Journal failures dispatch nothing; corrupt recovery fails closed an
     assert(restored.state.error);await restored.start(fields(),destinations(),()=>true);assert.equal(posts(f).length,0);await restored.clear();assert.equal(posts(f).length,0);
 });
 test('save','Concurrent taps share one submission; backgrounding stops undispatched destinations',async()=>{
-    const f=model(),c=await f.coordinator(),gate=defer();let visible=true;f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    const f=model(),c=await f.coordinator(),gate=defer();let visible=true;f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const pending=c.start(fields(),destinations(),()=>visible);await new Promise(r=>setImmediate(r));await c.start(fields(),destinations(),()=>true);assert.equal(posts(f).length,1);
     visible=false;gate.resolve(f.commit(posts(f)[0]));await pending;assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','pending','pending']);
     f.state.override=null;visible=true;await c.sendPending(()=>visible);assert.equal(posts(f).length,3);
@@ -155,7 +155,7 @@ test('draft','Draft and independent notes survive background while private UI an
 });
 test('draft','Dirty Back and swipe offer Stay/Discard, and active saving blocks abandonment',async()=>{
     const f=model(),r=f.render();await r.settle();await fill(r);assert(f.rt.attemptRemoval({type:'POP'}));await r.settle();await click(r,'Stay');
-    await toggle(r,'My Places');const gate=defer();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    await toggle(r,'My Places');const gate=defer();f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const pending=button(r,'Save Visit').props.onPress();await r.settle();assert(f.rt.attemptRemoval({type:'POP'}));await r.settle();
     assert(textOf(r.output).includes('Save in progress'));assert(!nodes(r.output).some(n=>n.type==='Pressable'&&textOf(n.props.children)==='Discard'));
     gate.resolve(response({},503));await pending;await r.settle();r.unmount();
@@ -164,7 +164,7 @@ test('draft','Account replacement and stale submit handlers cannot send or navig
     for(const phase of ['preflight','dispatched']){
         const f=model(),r=f.render();await r.settle();await fill(r);await toggle(r,'My Places');const gate=defer();
         if(phase==='preflight')f.rt.supabase.auth.getSession=()=>gate.promise;
-        else f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+        else f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
         const save=button(r,'Save Visit').props.onPress,pending=save();await r.settle();f.rt.switch('b',r);await r.settle();
         gate.resolve(phase==='preflight'?{data:{session:f.rt.world.auth.session},error:null}:response(entry));await pending;await r.settle();await save();
         assert.equal(posts(f).length,phase==='preflight'?0:1);assert.equal(f.rt.world.navigation.length,0);assert.equal(f.rt.world.lateUpdates,0);r.unmount();
@@ -172,7 +172,7 @@ test('draft','Account replacement and stale submit handlers cannot send or navig
 });
 test('draft','Confirmed background saves remain reviewable without automatic navigation or a second mutation',async()=>{
     const f=model(),r=f.render();await r.settle();await fill(r);await toggle(r,'My Places');const gate=defer();
-    f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;const save=button(r,'Save Visit').props.onPress,pending=save();await r.settle();
+    f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;const save=button(r,'Save Visit').props.onPress,pending=save();await r.settle();
     f.rt.emit('inactive');f.rt.emit('active');await r.settle();gate.resolve(f.commit(posts(f)[0]));await pending;await r.settle();
     assert.equal(f.rt.world.navigation.length,0);assert(textOf(r.output).includes('Confirmed saved'));await save();assert.equal(posts(f).length,1);r.unmount();
 });
@@ -241,6 +241,37 @@ test('navigation','Single-destination saves remove completed forms and open exac
         assert.equal(h.current().params[destination==='My Places'?'id':'entryId'],f.state.cards[0].id);r.unmount();
     }
 });
+test('navigation','Add Another Visit returns to its Home/map detail only for the original destination, without finished forms',async()=>{
+    const {history}=await require('./router-fixture.cjs')();
+    for(const origin of ['home','map'])for(const destination of ['My Places','Dinner']) {
+        const h=history(origin==='home'?'/':'/saved-map');
+        const detail={pathname:'/'+origin+'/personal-place/[id]',params:{id:fixture().id}};h.router.push(detail);const detailKey=h.current().key;
+        const params={personalId:fixture().id,[origin==='home'?'fromHome':'fromMap']:'1'};
+        h.router.push({pathname:'/add-visit',params});const f=model({router:h.router});f.rt.world.params=params;
+        f.state.cards.push({id:fixture().id,kind:'personal',scope:'a',name:fixture().name,address:fixture().address});
+        const r=f.render();await r.settle();await toggle(r,destination);await click(r,'Save Visit');
+        assert.equal(posts(f).length,1);assert(!h.allNames().includes('add-visit'));
+        if(destination==='My Places') {assert.equal(h.current().key,detailKey);h.router.back();assert.equal(h.current().name,origin==='home'?'index':'saved-map');}
+        else {assert.equal(h.chain()[2].name,'(groups)');assert.equal(h.current().name,'group/[id]/restaurant/[entryId]');}
+        r.unmount();
+    }
+});
+test('navigation','Group Add Another Visit retains Home/map history without borrowing a different group destination',async()=>{
+    const {history}=await require('./router-fixture.cjs')();
+    for(const origin of ['home','map'])for(const destination of ['Dinner','Lunch']) {
+        const h=history(origin==='home'?'/':'/saved-map');
+        h.router.push({pathname:'/'+origin+'/group/[id]/restaurant/[entryId]',params:{id:ga,entryId:entry}});const previous=h.current().key;
+        const params={groupId:ga,restaurantId:entry,[origin==='home'?'fromHome':'fromMap']:'1'};
+        h.router.push({pathname:'/add-visit',params});const f=model({router:h.router});f.rt.world.params=params;
+        f.state.cards.push({id:entry,kind:'group',scope:ga,name:'Cafe',address:'100 Main Street'});
+        f.state.override=call=>call.url.pathname==='/rest/v1/group_restaurants'?response({id:entry,restaurant_id:entry,apple_place_id:null})
+            :call.url.pathname==='/rest/v1/restaurants'?response({id:entry,name:'Cafe',address:'100 Main Street',cuisine:null}):null;
+        const r=f.render();await r.settle();await toggle(r,destination);await click(r,'Save Visit');assert.equal(posts(f).length,1);assert(!h.allNames().includes('add-visit'));
+        if(destination==='Dinner')assert.equal(h.current().key,previous);
+        else {assert.equal(h.chain()[2].name,'(groups)');assert.equal(h.current().params.id,gb);}
+        r.unmount();
+    }
+});
 test('navigation','Multiple destinations replace the completed form with the Add summary',async()=>{
     const {history}=await require('./router-fixture.cjs')(),h=history('/add');h.router.push('/add-visit');const f=model({router:h.router}),r=f.render();
     await r.settle();await fill(r);await toggle(r,'My Places');await toggle(r,'Dinner');await toggle(r,'Lunch');await click(r,'Save Visit');
@@ -249,7 +280,7 @@ test('navigation','Multiple destinations replace the completed form with the Add
 function deadlines(){const pending=new Set();return {setTimeout(fn,ms){if(ms!==20000)return setTimeout(fn,ms);const timer={fn};pending.add(timer);return timer;},
     clearTimeout(timer){if(!pending.delete(timer))clearTimeout(timer);},expire(){const timers=[...pending];assert(timers.length);pending.clear();timers.forEach(t=>t.fn());}};}
 test('save','A stalled dispatched save becomes uncertain, ignores late success, and reconciles without replay',async()=>{
-    const time=deadlines(),f=model(time),c=await f.coordinator(),gate=defer();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    const time=deadlines(),f=model(time),c=await f.coordinator(),gate=defer();f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const pending=c.start(fields(),destinations().slice(0,1),()=>true);await new Promise(r=>setImmediate(r));assert.equal(posts(f).length,1);
     time.expire();await pending;assert.equal(c.state.busy,false);assert.equal(c.state.attempts[0].status,'uncertain');
     gate.resolve(f.commit(posts(f)[0]));await new Promise(r=>setImmediate(r));assert.equal(c.state.attempts[0].status,'uncertain');
@@ -299,14 +330,14 @@ test('draft','Visit rating and would-go-again controls independently select and 
 });
 test('save','Mixed uncertain group outcome preserves other successes and never resends any destination during reconciliation',async()=>{
     const f=model(),c=await f.coordinator();f.state.override=call=>{
-        if(call.url.pathname.endsWith('/save_group_visit_destination')&&call.body.target_group_id===ga){f.commit(call);return response({},503);}return null;
+        if((call.url.pathname.endsWith('/save_group_visit_destination') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'group'))&&call.body.target_group_id===ga){f.commit(call);return response({},503);}return null;
     };
     await c.start(fields(),destinations(),()=>true);assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','uncertain','saved']);
     f.state.override=null;await c.reconcile(()=>true);assert(c.state.attempts.every(a=>a.status==='saved'));assert.equal(posts(f).length,3);assert.equal(f.state.visits.length,3);
 });
 test('save','Retrying a failed destination does not also dispatch paused destinations',async()=>{
     const f=model(),c=await f.coordinator(),gate=defer();let visible=true;
-    f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const pending=c.start(fields(),destinations(),()=>visible);await new Promise(r=>setImmediate(r));visible=false;gate.resolve(response({code:'23514'},400));await pending;
     assert.deepEqual(c.state.attempts.map(a=>a.status),['failed','pending','pending']);visible=true;f.state.override=null;await c.sendPending(()=>visible,c.state.attempts[0].requestId);
     assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','pending','pending']);assert.equal(posts(f).length,2);
@@ -320,7 +351,7 @@ test('navigation','Restored multiple successes list destination links and Done c
 });
 test('draft','Back and repeated submit callbacks before React rerenders cannot leave or duplicate an active save',async()=>{
     const f=model(),r=f.render();await r.settle();await fill(r);await toggle(r,'My Places');const gate=defer();
-    f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const save=button(r,'Save Visit').props.onPress,back=button(r,'Back').props.onPress;
     const first=save();await save();back();assert.equal(f.rt.world.navigation.length,0);await r.settle();assert.equal(posts(f).length,1);
     gate.resolve(f.commit(posts(f)[0]));await first;await r.settle();assert.equal(posts(f).length,1);assert.equal(f.rt.world.navigation.length,1);r.unmount();
@@ -360,7 +391,7 @@ test('save','Navigation completion refuses busy, partial, pending and uncertain 
         const before=JSON.stringify(c.state.attempts),journal=[...f.store.values],sent=posts(f).length;
         assert.equal(await c.clearConfirmed(),false);assert.equal(JSON.stringify(c.state.attempts),before);assert.deepEqual([...f.store.values],journal);assert.equal(posts(f).length,sent);
     }
-    const f=model(),c=await f.coordinator(),gate=defer();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    const f=model(),c=await f.coordinator(),gate=defer();f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const saving=c.start(fields(),destinations().slice(0,1),()=>true);await new Promise(r=>setImmediate(r));
     assert.equal(await c.clearConfirmed(),false);assert.equal(f.store.values.size,1);
     gate.resolve(response({},503));await saving;assert.equal(await c.clearConfirmed(),false);
@@ -392,7 +423,7 @@ test('navigation','Done clears a confirmed summary and the next visit starts wit
 test('navigation','Done on an in-place confirmed form clears its journal and removes the completed form',async()=>{
     const {history}=await require('./router-fixture.cjs')(),h=history('/add');h.router.push('/add-visit');const f=model({router:h.router}),r=f.render();
     await r.settle();await fill(r);await toggle(r,'My Places');await toggle(r,'Dinner');const gate=defer();
-    f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit')?gate.promise:null;
+    f.state.override=call=>(call.url.pathname.endsWith('/save_personal_visit') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'personal'))?gate.promise:null;
     const saving=button(r,'Save Visit').props.onPress();await r.settle();f.rt.emit('inactive');f.rt.emit('active');await r.settle();
     gate.resolve(f.commit(posts(f)[0]));await saving;await r.settle();f.state.override=null;await click(r,'Continue Unsent Destinations');await click(r,'Done');
     assert.equal(f.store.values.size,0);assert(!h.allNames().includes('add-visit'));assert.equal(h.current().name,'index');assert.equal(f.state.visits.length,2);r.unmount();
@@ -402,7 +433,7 @@ test('navigation','Add tab resets completed results after leaving or reselecting
     for(const detail of [false,true]){
         const h=history('/add'),f=summaryModel({router:h.router,navigation:{getState:h.tabState,dispatch:h.dispatch}});
         f.rt.world.tabsScreen=f.rt.load('app/add').default;const r=f.render('(app)/(tabs)/_layout');await r.settle();await click(r,'Check Saved Results');
-        if(detail)await click(r,'Open Dinner');else h.select('index');
+        if(detail)await click(r,'Open Dinner');else h.select('(home)');
         const tabs=nodes(r.output).find(n=>n.type==='Tabs'),route=h.tabState().routes.find(r=>r.name==='add');let prevented=false;
         tabs.props.screenListeners({navigation:{getState:h.tabState,dispatch:h.dispatch},route}).tabPress({preventDefault(){prevented=true;}});await r.settle();
         assert(prevented);assert.equal(h.chain()[2].name,'add');assert.equal(h.current().name,'index');assert(button(r,'Enter Restaurant Manually'));
@@ -455,7 +486,7 @@ test('personal','Personal card deletion stays cancellable and stale revisions re
     await click(r,'Delete Personal Place');await click(r,'Cancel');assert(!rt.world.requests.some(c=>c.url.pathname.endsWith('/delete_personal_place')));
     await click(r,'Delete Personal Place');rt.world.rows[0].revision=2;rt.world.rows[0].name='Newer Cafe';await click(r,'Confirm Delete');
     assert(textOf(r.output).includes('Newer Cafe'));assert(!nodes(r.output).some(n=>n.type==='Pressable'&&textOf(n.props.children)==='Confirm Delete'));assert.equal(rt.world.rows.length,1);
-    await click(r,'Delete Personal Place');await click(r,'Confirm Delete');assert.equal(rt.world.rows.length,0);assert.equal(rt.world.navigation.at(-1),'/my-places');r.unmount();
+    await click(r,'Delete Personal Place');await click(r,'Confirm Delete');assert.equal(rt.world.rows.length,0);assert.equal(rt.world.navigation.at(-1),'BACK');r.unmount();
 });
 test('personal','Lost whole-card deletion reloads missing state and retained callbacks never resend',async()=>{
     const rt=runtime();rt.world.params={id:fixture().id};rt.world.rows=[fixture()];

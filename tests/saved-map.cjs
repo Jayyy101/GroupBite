@@ -234,26 +234,31 @@ const source = (overrides = {}) => ({ key: 'personal:one', kind: 'personal', ent
         const text = textOf(r.output); assert(text.includes('All Saved · 6 mapped · 3 unmapped')); assert(text.includes('0 mapped restaurants in this map area'));
         assert(text.includes('Outside this map area')); assert(text.includes('QA Manual Restaurant')); assert(text.includes('No saved coordinates')); r.unmount();
     });
-    await test('Home shortcut retains the development gate and map Back uses only the fixed Home origin', async () => {
+    await test('Home shortcut retains the development gate and map Back follows mounted history', async () => {
         const f = model(), Shortcut = f.rt.load('@/components/saved-map-shortcut').default;
         const shortcut = f.rt.render(Shortcut, false); await shortcut.settle(); await click(shortcut, 'Open Saved Map');
-        assert.equal(f.rt.world.navigation.at(-1).pathname, '/saved-map'); assert.equal(f.rt.world.navigation.at(-1).params.fromHome, '1');
+        assert.equal(f.rt.world.navigation.at(-1), '/home/saved-map');
         shortcut.unmount();
         const Screen = f.rt.load('@/components/saved-map-screen').default;
-        const r = f.rt.render(() => ({ type: Screen, props: { userId: 'a', fromHome: true } }), false); await r.settle(); await click(r, 'Back');
-        assert.equal(f.rt.world.navigation.at(-1), '/'); r.unmount();
+        const r = f.rt.render(() => ({ type: Screen, props: { userId: 'a', origin: 'home' } }), false); await r.settle(); await click(r, 'Back');
+        assert.equal(f.rt.world.navigation.at(-1), 'BACK'); r.unmount();
         for (const options of [{ platform: 'ios', development: false }, { platform: 'android', development: true }]) {
             const rt = runtime(options), hidden = rt.render(rt.load('@/components/saved-map-shortcut').default, false); await hidden.settle();
             assert(!nodes(hidden.output).some(n => n.props?.accessibilityLabel === 'Open Saved Map')); assert.equal(rt.world.requests.length, 0); hidden.unmount();
         }
+    });
+    await test('Legacy Home map links redirect into Home without creating cross-tab Back history', async () => {
+        const rt=runtime({platform:'ios',development:true,mocks:{'@/components/saved-map-screen':{default:'SavedMapScreen'}}});
+        rt.world.params={fromHome:'1'};const r=rt.render(rt.load('app/saved-map').default,false);await r.settle();
+        assert(nodes(r.output).some(n=>n.type==='Redirect'&&n.props.href==='/home/saved-map'));
+        assert.equal(rt.world.requests.length,0);r.unmount();
     });
     await test('The actual Home route exposes Saved Map without requiring dashboard reads', async () => {
         const rt = runtime({ platform: 'ios', development: true });
         rt.world.auth.loading = true;
         const r = rt.render(rt.load('app/index').default, false); await r.settle();
         await click(r, 'Open Saved Map');
-        assert.equal(rt.world.navigation.at(-1).pathname, '/saved-map');
-        assert.equal(rt.world.navigation.at(-1).params.fromHome, '1');
+        assert.equal(rt.world.navigation.at(-1), '/home/saved-map');
         assert.equal(rt.world.requests.length, 0); assert.equal(rt.world.localWrites, 0); r.unmount();
     });
     await test('Empty collections and unsupported builds neither invent pins nor read another source', async () => {
@@ -300,7 +305,7 @@ const source = (overrides = {}) => ({ key: 'personal:one', kind: 'personal', ent
     });
     await test('Map-origin detail Back and edit return paths preserve collection IDs', async () => {
         const f = model(), nav = f.rt.load('@/lib/restaurant-navigation'), auth = f.rt.load('@/lib/auth-navigation');
-        assert.equal(nav.personalPlaceHref(id(100), false, true).pathname, '/map/personal-place/[id]');
+        assert.equal(nav.personalPlaceHref(id(100), 'map').pathname, '/map/personal-place/[id]');
         for (const path of ['/saved-map', `/map/personal-place/${id(100)}`, `/map/group/${id(1)}/restaurant/${id(101)}`]) assert.equal(auth.safeAuthReturnTo(path), path);
         assert.equal(auth.safeAuthReturnTo('/map/unknown'), '/');
         assert.equal(auth.authReturnTo(`/map/group/${id(1)}/restaurant/${id(101)}`, { id: id(1), entryId: id(101) }), `/map/group/${id(1)}/restaurant/${id(101)}`);

@@ -55,7 +55,7 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
     });
     await test('Lost group response reconciles an atomic receipt after restart without replay',async()=>{
         const f=model({development:true}),c=await f.coordinator();f.state.override=call=>{
-            if(!call.url.pathname.endsWith('/save_group_visit_with_mapkit_location'))return null;
+            if(!(call.url.pathname.endsWith('/save_group_visit_with_mapkit_location') || (call.url.pathname.endsWith('/save_visit_event_destination') && call.body.destination_kind === 'group')))return null;
             f.commit(call);return response({},503);
         };
         await c.start(input(),destinations().slice(1,2),()=>true);assert.equal(c.state.attempts[0].status,'uncertain');
@@ -101,7 +101,7 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
             await enter(form,label,'Changed');await click(form,'My Places');await click(form,'Save Visit');
             assert.equal(posts(f).length,1);
             if(label==='Cuisine')assert.deepEqual(posts(f)[0].body.selected_address,address);
-            else assert(!('selected_address' in posts(f)[0].body));
+            else assert.equal(posts(f)[0].body.selected_address,null);
             form.unmount();
         }
     });

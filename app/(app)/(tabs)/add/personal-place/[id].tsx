@@ -1,5 +1,5 @@
 import PersonalPlaceScreen from "@/app/(app)/(tabs)/(my-places)/personal-place/[id]";
 
 export default function SavedPersonalPlaceScreen() {
-    return <PersonalPlaceScreen fromAdd />;
+    return <PersonalPlaceScreen origin="add" />;
 }

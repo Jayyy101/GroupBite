@@ -95,7 +95,7 @@ function AddLanding({ userId }: { userId: string }) {
             open={result => {
                 if (choosing.current) return;
                 choosing.current = true;
-                leave.finish(() => router.push(destinationHref(result, true)));
+                leave.finish(() => router.push(destinationHref(result, "add")));
             }}
             done={async () => {
                 if (!canOperate()) return;
@@ -139,7 +139,7 @@ function AddLanding({ userId }: { userId: string }) {
         {state.ready && <PreviousAddResults canOperate={canOperate} open={result => {
             if (choosing.current) return;
             choosing.current = true;
-            leave.finish(() => router.push(destinationHref(result, true)));
+            leave.finish(() => router.push(destinationHref(result, "add")));
         }} />}
     </ScreenScaffold>}</PersonalAccess>;
 }
