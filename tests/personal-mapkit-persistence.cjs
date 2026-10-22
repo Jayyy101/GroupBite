@@ -29,7 +29,7 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
 (async()=>{
     for(const placeId of [undefined,'Opaque:Apple/ID'])await test(`MapKit selection through actual Add form persists exact point ${placeId?'with':'without'} Apple ID and renders a private pin`,async()=>{
         const f=await selectedForm(placeId);await click(f.r,'My Places');await click(f.r,'Save Visit');
-        const sent=posts(f);assert.equal(sent.length,1);assert(sent[0].url.pathname.endsWith('/save_personal_visit_with_mapkit_point'));
+        const sent=posts(f);assert.equal(sent.length,1);assert(sent[0].url.pathname.endsWith('/save_personal_visit_with_mapkit_location'));
         assert.equal(sent[0].body.selected_latitude,result.latitude);assert.equal(sent[0].body.selected_longitude,result.longitude);
         assert.equal(sent[0].body.restaurant_apple_place_id,placeId??null);assert.equal(f.state.visits.length,1);
         const journal=JSON.stringify([...f.store.values]);assert(!journal.includes(String(result.latitude))&&!journal.includes(result.address));
@@ -47,10 +47,10 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
         assert(posts(f)[0].url.pathname.endsWith('/save_personal_visit'));assert.equal(posts(f)[0].body.restaurant_apple_place_id,null);
         assert(!('selected_latitude'in posts(f)[0].body));assert.equal(f.state.points.length,0);f.r.unmount();
     });
-    await test('Native personal point stays out of group payloads and recovery storage',async()=>{
+    await test('Native selected points persist in each destination while private notes stay isolated',async()=>{
         const f=model({development:true}),c=await f.coordinator();await c.start(nativeFields(),destinations(),()=>true);
-        assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','saved','saved']);assert.equal(f.state.points.length,1);
-        for(const call of posts(f).slice(1))assert(!('selected_latitude'in call.body)&&!('selected_longitude'in call.body));
+        assert.deepEqual(c.state.attempts.map(a=>a.status),['saved','saved','saved']);assert.equal(f.state.points.length,3);
+        for(const call of posts(f))assert.equal(call.body.selected_latitude,result.latitude);
         assert.equal(posts(f)[0].body.visit_notes,'PRIVATE');assert.equal(posts(f)[1].body.visit_notes,'SHARED');
         const journal=[...f.store.values.values()][0];assert(!journal.includes(String(result.latitude))&&!journal.includes('mapkit')&&!journal.includes('PRIVATE'));
     });
@@ -69,13 +69,13 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
         assert.equal(f.api.freezeAddSubmissions('a',fields(),destinations().slice(0,1))[0].mapkitPoint,undefined);
     });
     await test('Missing point RPC is a visible definitive failure, with no silent coordinate-dropping fallback',async()=>{
-        const f=model({development:true}),c=await f.coordinator();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit_with_mapkit_point')?response({code:'PGRST202'},404):null;
+        const f=model({development:true}),c=await f.coordinator();f.state.override=call=>call.url.pathname.endsWith('/save_personal_visit_with_mapkit_location')?response({code:'PGRST202'},404):null;
         await c.start(nativeFields(),destinations().slice(0,1),()=>true);assert.equal(c.state.attempts[0].status,'failed');
         assert(c.state.attempts[0].message.includes('pending backend update'));assert.equal(posts(f).length,1);assert.equal(f.state.visits.length,0);
     });
     await test('Lost native-save response reconciles an atomic receipt without replaying or adding another visit',async()=>{
         const f=model({development:true}),c=await f.coordinator();f.state.override=call=>{
-            if(!call.url.pathname.endsWith('/save_personal_visit_with_mapkit_point'))return null;f.commit(call);return response({},503);
+            if(!call.url.pathname.endsWith('/save_personal_visit_with_mapkit_location'))return null;f.commit(call);return response({},503);
         };
         await c.start(nativeFields(),destinations().slice(0,1),()=>true);assert.equal(c.state.attempts[0].status,'uncertain');
         await c.sendPending(()=>true);assert.equal(posts(f).length,1);f.state.override=null;

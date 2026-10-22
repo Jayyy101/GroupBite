@@ -62,7 +62,7 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
             return {all,manual,refresh};
         };
         assertActions();assert(textOf(r.output).includes('No saved restaurants yet.'));
-        const gate=defer();f.state.override=c=>c.url.pathname.endsWith('/get_recent_add_restaurants')?gate.promise:null;
+        const gate=defer();f.state.override=c=>/\/get_recent_add_restaurants(?:_with_mapkit)?$/.test(c.url.pathname)?gate.promise:null;
         await click(r,'Refresh Recent Restaurants');
         const loading=assertActions();assert(loading.refresh.props.disabled);assert(loading.refresh.props.accessibilityState.disabled);
         assert(textOf(r.output).includes('Loading recent restaurants...'));assert(!loading.manual.props.disabled);
@@ -72,11 +72,11 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
             assert(populated.all.indexOf(populated.refresh)<populated.all.indexOf(card));}
         assert(textOf(r.output).includes('Swipe to browse · Tap to add another visit'));
         assert(!textOf(r.output).includes('Choosing a restaurant does not select where to save your next visit.'));
-        f.state.override=c=>c.url.pathname.endsWith('/get_recent_add_restaurants')?response({},503):null;
+        f.state.override=c=>/\/get_recent_add_restaurants(?:_with_mapkit)?$/.test(c.url.pathname)?response({},503):null;
         await click(r,'Refresh Recent Restaurants');assertActions();
         assert(textOf(r.output).includes('Could not load recent restaurants.'));assert(!textOf(r.output).includes('Recent Cafe'));
         f.state.override=null;await click(r,'Refresh Recent Restaurants');assertActions();assert(textOf(r.output).includes('No saved restaurants yet.'));
-        assert.equal(f.rt.world.requests.filter(c=>c.url.pathname.endsWith('/get_recent_add_restaurants')).length,4);
+        assert.equal(f.rt.world.requests.filter(c=>/\/get_recent_add_restaurants(?:_with_mapkit)?$/.test(c.url.pathname)).length,4);
         await click(r,'Enter Restaurant Manually');assert.equal(f.rt.world.navigation.at(-1),'/add-visit');assert.equal(f.state.visits.length,0);r.unmount();
     });
     await test('Live suggestions resolve cached completions before opening the chosen restaurant in unified Add',async()=>{

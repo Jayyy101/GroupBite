@@ -1,3 +1,5 @@
+import type { MapKitAddress } from "@/lib/mapkit-address";
+
 export type Profile = {
     id: string;
     display_name: string;
@@ -96,7 +98,7 @@ export type AddRestaurant = {
     name: string; address: string; cuisine: string | null; apple_place_id?: string | null;
     destination_kind?: "personal" | "group"; group_id?: string | null; entry_id?: string;
     // Transient native selection tied to display facts, never a route/journal value.
-    mapkit_point?: Readonly<{ name: string; address: string; latitude: number; longitude: number }>;
+    mapkit_point?: Readonly<{ name: string; address: string; latitude: number; longitude: number; structured_address?: MapKitAddress | null }>;
 };
 export type AddVisitArgs = {
     client_request_id: string; restaurant_name: string; restaurant_address: string;
@@ -196,6 +198,12 @@ export type SavedLocation = {
 export type Database = {
     public: {
         Tables: {
+            personal_mapkit_locations: { Row: { personal_place_id: string; owner_user_id: string; address_snapshot: string;
+                latitude: number; longitude: number; structured_address: MapKitAddress | null; created_at: string };
+                Insert: never; Update: never; Relationships: [] };
+            group_mapkit_locations: { Row: { group_restaurant_id: string; address_snapshot: string;
+                latitude: number; longitude: number; structured_address: MapKitAddress | null; created_at: string };
+                Insert: never; Update: never; Relationships: [] };
             personal_visits: { Row: PersonalVisit; Insert: never; Update: never; Relationships: [] };
             personal_places: {
                 Row: PersonalPlace;
@@ -260,9 +268,19 @@ export type Database = {
         };
         Views: { [_ in never]: never };
         Functions: {
+            save_personal_visit_with_mapkit_location: { Args: AddVisitArgs & { selected_latitude: number; selected_longitude: number;
+                selected_address: MapKitAddress | null }; Returns: string };
+            save_group_visit_with_mapkit_location: { Args: AddVisitArgs & { target_group_id: string; expected_membership_id: string;
+                selected_latitude: number; selected_longitude: number; selected_address: MapKitAddress | null }; Returns: string };
+            get_saved_mapkit_location: { Args: { target_kind: "personal" | "group"; target_entry_id: string; expected_address: string };
+                Returns: NonNullable<AddRestaurant["mapkit_point"]> | null };
+            get_recent_add_restaurants_with_mapkit: { Args: { page_size?: number; page_offset?: number };
+                Returns: (AddRestaurant & { destination_kind: "personal" | "group"; group_id: string | null; entry_id: string })[] };
             save_personal_visit_with_mapkit_point: { Args: AddVisitArgs & { selected_latitude: number; selected_longitude: number }; Returns: string };
             set_personal_mapkit_location: { Args: { target_personal_place_id: string; expected_revision: number; expected_address: string;
                 selected_latitude: number; selected_longitude: number }; Returns: boolean };
+            set_personal_mapkit_location_with_address: { Args: { target_personal_place_id: string; expected_revision: number; expected_address: string;
+                selected_latitude: number; selected_longitude: number; selected_address: MapKitAddress | null }; Returns: boolean };
             get_personal_mapkit_locations: { Args: { page_size?: number; page_offset?: number };
                 Returns: { id: string; owner_user_id: string; name: string; address: string; latitude: number; longitude: number }[] };
             save_personal_visit: { Args: AddVisitArgs; Returns: string };

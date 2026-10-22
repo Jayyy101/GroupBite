@@ -6,7 +6,7 @@ let passed=0;
 const test=async(label,fn)=>{await fn();passed++;console.log('PASS '+label);};
 const defer=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 const has=(r,label)=>nodes(r.output).some(n=>n.type==='Pressable'&&textOf(n.props.children)===label);
-const writes=f=>f.rt.world.requests.filter(c=>c.url.pathname.endsWith('/set_personal_mapkit_location'));
+const writes=f=>f.rt.world.requests.filter(c=>c.url.pathname.endsWith('/set_personal_mapkit_location_with_address'));
 const nativeAddress='123 Fixture Avenue, Test City, CA 90000';
 function clock(){
     let now=0,id=0;const timers=new Map();
@@ -28,12 +28,13 @@ function setup(options={}) {
         const p=rt.world.rows.find(p=>p.id===call.body.target_personal_place_id&&p.owner_user_id===call.user);
         assert(p);assert.equal(p.revision,call.body.expected_revision);assert.equal(p.address,call.body.expected_address);
         if(!state.points.some(row=>row.id===p.id))state.points.push({id:p.id,owner_user_id:p.owner_user_id,name:p.name,address:p.address,
-            latitude:call.body.selected_latitude,longitude:call.body.selected_longitude});
+            latitude:call.body.selected_latitude,longitude:call.body.selected_longitude,structured_address:call.body.selected_address});
     }
     rt.world.override=call=>{
         if(call.url.pathname.endsWith('/get_saved_locations'))return response(state.verified);
         if(call.url.pathname.endsWith('/get_personal_mapkit_locations'))return response(state.points.filter(p=>p.owner_user_id===call.user));
-        if(call.url.pathname.endsWith('/set_personal_mapkit_location')) {
+        if(call.url.pathname.endsWith('/get_saved_mapkit_location'))return response(state.points.find(p=>p.id===call.body.target_entry_id&&p.owner_user_id===call.user)??null);
+        if(call.url.pathname.endsWith('/set_personal_mapkit_location_with_address')) {
             if(state.onWrite)return state.onWrite(call);
             commit(call);return response(true);
         }
@@ -88,13 +89,26 @@ function selection(overrides={}){return {name:'Fixture Burger',address:nativeAdd
         assert(!textOf(r.output).includes('private map failure'));fail=false;await click(r,'Check saved location');
         assert(has(r,'Add missing map location'));assert.equal(writes(f).length,0);r.unmount();
     });
+    await test('Structured repair retains native address fields and requires them during uncertain readback',async()=>{
+        for(const loseDetails of [false,true]){
+            const f=setup({nativeRow:{structuredAddress:{city:'Native City',country_code:'US'}}}),before=facts(f),r=f.render();
+            await r.settle();await select(f,r);
+            f.state.onWrite=call=>{f.commit(call);if(loseDetails)delete f.state.points[0].structured_address;return response({},503);};
+            await click(r,'Attach location only');assert.equal(writes(f).length,1);
+            assert.deepEqual(writes(f)[0].body.selected_address,{street:null,city:'Native City',region:null,postal_code:null,country:null,country_code:'US'});
+            assert.equal(facts(f),before);
+            assert(textOf(r.output).includes(loseDetails?'Only read-only checks':'Location attachment verified'));
+            if(loseDetails){await click(r,'Check saved location');assert.equal(writes(f).length,1);}
+            r.unmount();
+        }
+    });
     await test('Confirmed location-only RPC preserves every original field and visit; optional provider ID is not written; map survives remount',async()=>{
         const f=setup(),before=facts(f),r=f.render();await r.settle();await select(f,r);await click(r,'Attach location only');
         assert.equal(writes(f).length,1);const call=writes(f)[0];assert.equal(call.user,'a');
         assert.deepEqual(call.body,{target_personal_place_id:fixture().id,expected_revision:1,expected_address:'Private Address',
-            selected_latitude:37.123456789,selected_longitude:-121.123456789});
+            selected_latitude:37.123456789,selected_longitude:-121.123456789,selected_address:null});
         assert.equal(facts(f),before);assert(textOf(r.output).includes('Location attachment verified'));
-        assert.equal(f.rt.world.requests.filter(c=>c.method!=='GET'&&!c.url.pathname.endsWith('/get_saved_locations')&&!c.url.pathname.endsWith('/get_personal_mapkit_locations')).length,1);
+        assert.equal(f.rt.world.requests.filter(c=>c.method!=='GET'&&!c.url.pathname.endsWith('/get_saved_locations')&&!c.url.pathname.endsWith('/get_personal_mapkit_locations')&&!c.url.pathname.endsWith('/get_saved_mapkit_location')).length,1);
         const pins=await f.rt.load('@/lib/personal-map').listPersonalMapPins('a',new AbortController().signal);
         assert.equal(pins.length,1);assert.equal(pins[0].id,fixture().id);assert.equal(pins[0].latitude,37.123456789);
         r.unmount();const reloaded=f.render();await reloaded.settle();assert(!has(reloaded,'Add missing map location'));

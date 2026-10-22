@@ -16,14 +16,14 @@ function model(options={}){
         memberships:[{group_id:ga,membership_id:ma},{group_id:gb,membership_id:mb}],cards:[],visits:[],points:[],receipts:new Map()};
     const uuid=()=>`00000000-0000-0000-0000-${String(sequence++).padStart(12,'0')}`;
     function commit(call){
-        const a=call.body,kind=/\/save_personal_visit(?:_with_mapkit_point)?$/.test(call.url.pathname)?'personal':'group',scope=kind==='personal'?call.user:a.target_group_id;
+        const a=call.body,kind=/\/save_personal_visit(?:_with_mapkit_(?:point|location))?$/.test(call.url.pathname)?'personal':'group',scope=kind==='personal'?call.user:a.target_group_id;
         if(kind==='group'&&(call.user!=='a'||!state.memberships.some(m=>m.group_id===scope&&m.membership_id===a.expected_membership_id)))return response({code:'42501'},403);
         const key=call.user+':'+a.client_request_id,old=state.receipts.get(key);
         if(old)return old.payload===JSON.stringify(a)?response(old.entry_id):response({code:'22023'},400);
         let card=state.cards.find(c=>c.kind===kind&&c.scope===scope&&c.name===a.restaurant_name&&c.address===a.restaurant_address);
         if(!card){card={id:uuid(),kind,scope,name:a.restaurant_name,address:a.restaurant_address};state.cards.push(card);}
         const visit={id:uuid(),card:card.id,kind,scope,date:a.visit_date,rating:a.visit_rating,again:a.visit_would_go_again,notes:a.visit_notes};state.visits.push(visit);
-        if(call.url.pathname.endsWith('/save_personal_visit_with_mapkit_point')&&!state.points.some(p=>p.id===card.id))state.points.push({id:card.id,owner_user_id:call.user,
+        if(/_with_mapkit_(?:point|location)$/.test(call.url.pathname)&&!state.points.some(p=>p.id===card.id))state.points.push({id:card.id,owner_user_id:kind==='personal'?call.user:null,group_id:kind==='group'?scope:null,structured_address:a.selected_address??null,
             name:card.name,address:card.address,latitude:a.selected_latitude,longitude:a.selected_longitude});
         state.receipts.set(key,{payload:JSON.stringify(a),destination_kind:kind,group_id:kind==='group'?scope:null,entry_id:card.id,visit_id:visit.id,available:true});
         return response(card.id);
@@ -33,9 +33,10 @@ function model(options={}){
         const path=call.url.pathname;
         if(path==='/rest/v1/groups')return response(call.user==='a'?state.groups:[]);
         if(path==='/rest/v1/group_memberships')return response(call.user==='a'?state.memberships:[]);
-        if(path.endsWith('/get_recent_add_restaurants'))return response(options.recent??[]);
-        if(/\/(save_personal_visit(?:_with_mapkit_point)?|save_group_visit_destination)$/.test(path))return commit(call);
+        if(/\/get_recent_add_restaurants(?:_with_mapkit)?$/.test(path))return response(options.recent??[]);
+        if(/\/(save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(path))return commit(call);
         if(path.endsWith('/get_add_destination_result')){const r=state.receipts.get(call.user+':'+call.body.client_request_id);return response(r?[r]:[]);}
+        if(path.endsWith('/get_saved_mapkit_location'))return response(state.points.find(p=>p.id===call.body.target_entry_id)??null);
         if(path.endsWith('/get_saved_locations'))return response([]);
         if(path.endsWith('/get_personal_mapkit_locations'))return response(state.points.filter(p=>p.owner_user_id===call.user).slice(call.body.page_offset,call.body.page_offset+call.body.page_size));
         if(path==='/rest/v1/personal_places')return response(fixture({owner_user_id:call.user}));
@@ -50,7 +51,7 @@ const fields=()=>({restaurant:{name:' Cafe ',address:' 100 Main Street ',cuisine
     visited_on:'2026-10-17',rating:4,would_go_again:false,privateNotes:' PRIVATE ',groupNotes:' SHARED '});
 const destinations=()=>[{kind:'personal',label:'My Places'},{kind:'group',groupId:ga,membershipId:ma,label:'Dinner'},
     {kind:'group',groupId:gb,membershipId:mb,label:'Lunch'}];
-const posts=f=>f.rt.world.requests.filter(c=>/\/(save_personal_visit(?:_with_mapkit_point)?|save_group_visit_destination)$/.test(c.url.pathname));
+const posts=f=>f.rt.world.requests.filter(c=>/\/(save_personal_visit(?:_with_mapkit_(?:point|location))?|save_group_visit_(?:destination|with_mapkit_location))$/.test(c.url.pathname));
 async function toggle(r,label){const item=nodes(r.output).find(n=>n.props?.accessibilityRole==='checkbox'&&textOf(n.props.children).trim().replace(/^✓ /,'')===label);assert(item,'Missing '+label);item.props.onPress();await r.settle();}
 async function fill(r){await enter(r,'Restaurant name','Cafe');await enter(r,'Restaurant address','100 Main Street');await enter(r,'Private notes','PRIVATE');await enter(r,'Group notes','SHARED');}
 const nativeRestaurant=(overrides={})=>({id:'1:0',name:'Native Cafe',address:'100 Native Street',placeId:'Native ID',latitude:37,longitude:-122,kind:'business',source:'apple-maps-preview',...overrides});

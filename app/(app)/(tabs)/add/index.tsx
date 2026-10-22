@@ -55,7 +55,7 @@ function AddLanding({ userId }: { userId: string }) {
             try {
                 const token = await accountAccessToken(userId);
                 if (!valid || !canOperate()) return;
-                const response = await withRequestDeadline(signal => supabase.rpc("get_recent_add_restaurants", { page_size: 12, page_offset: 0 })
+                const response = await withRequestDeadline(signal => supabase.rpc(__DEV__ ? "get_recent_add_restaurants_with_mapkit" : "get_recent_add_restaurants", { page_size: 12, page_offset: 0 })
                     .setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
                 if (response.error) throw response.error;
                 if (valid && canOperate()) setRecent(recentRestaurantChoices(response.data));

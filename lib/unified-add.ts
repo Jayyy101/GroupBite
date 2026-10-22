@@ -4,13 +4,14 @@ import { normalizePersonalPlace } from "@/lib/personal-places";
 import { withRequestDeadline } from "@/lib/request-deadline";
 import { isUuid } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
+import { normalizeMapKitAddress, type MapKitAddress } from "@/lib/mapkit-address";
 import type { AddDestinationResult, AddRestaurant, AddVisitArgs } from "@/types/database";
 
 export type Destination = Readonly<{ kind: "personal" | "group"; groupId?: string; membershipId?: string; label: string }>;
 export type AddFields = { restaurant: AddRestaurant; visited_on: string | null; rating: number | null;
     would_go_again: boolean | null; privateNotes: string; groupNotes: string };
 export type Submission = Readonly<{ userId: string; destination: Destination; args: Readonly<AddVisitArgs>;
-    mapkitPoint?: Readonly<{ latitude: number; longitude: number }> }>;
+    mapkitPoint?: Readonly<{ latitude: number; longitude: number; structured_address?: MapKitAddress }> }>;
 export type Attempt = Readonly<{ requestId: string; destination: Destination; status: "pending" | "saved" | "failed" | "uncertain";
     submission?: Submission; result?: AddDestinationResult; message?: string }>;
 export type PreviousAdd = Readonly<{ id: string; attempts: readonly Attempt[]; durable: boolean; unreadable: boolean }>;
@@ -82,30 +83,36 @@ export function freezeAddSubmissions(userId: string, fields: AddFields, destinat
             restaurant_cuisine: value.cuisine, restaurant_apple_place_id: apple,
             target_entry_id: sameDestination ? fields.restaurant.entry_id ?? null : null,
             visit_date: value.visited_on, visit_rating: value.rating, visit_would_go_again: value.would_go_again, visit_notes: value.notes };
-        const point = __DEV__ && destination.kind === "personal" ? fields.restaurant.mapkit_point : undefined;
+        const point = __DEV__ ? fields.restaurant.mapkit_point : undefined;
         if (point !== undefined && (!point || typeof point.name !== "string" || typeof point.address !== "string"
             || point.name.trim() !== value.name || point.address.trim() !== value.address
             || !Number.isFinite(point.latitude) || !Number.isFinite(point.longitude)
             || Math.abs(point.latitude) > 90 || Math.abs(point.longitude) > 180 || (point.latitude === 0 && point.longitude === 0))) {
             throw new Error("Select this restaurant's location again before saving.");
         }
+        const address = point ? normalizeMapKitAddress(point.structured_address) : undefined;
         return Object.freeze({ userId, destination: Object.freeze({ ...destination }), args: Object.freeze(args),
-            ...(point ? { mapkitPoint: Object.freeze({ latitude: point.latitude, longitude: point.longitude }) } : {}) });
+            ...(point ? { mapkitPoint: Object.freeze({ latitude: point.latitude, longitude: point.longitude,
+                ...(address ? { structured_address: address } : {}) }) } : {}) });
     });
 }
 
 class ServerRejection extends Error { constructor(readonly code: string) { super("The server rejected this attempt without saving it."); } }
 const definitive = (error: unknown): error is ServerRejection => error instanceof ServerRejection && ["22023", "22007", "22008", "42501", "23514", "23503", "23505",
-    "25001", "PGRST202", "40P01", "40001", "57014"].includes(error.code);
+    "25001", "PGRST202", "GB001", "GB002", "40P01", "40001", "57014"].includes(error.code);
 
 export async function sendAddSubmission(submission: Submission, canSend: () => boolean): Promise<AddDestinationResult | null> {
     const token = await withRequestDeadline(() => accountAccessToken(submission.userId));
     if (!canSend()) return null;
     const { destination, args, mapkitPoint } = submission;
     const response = await withRequestDeadline(signal => (destination.kind === "personal"
-        ? mapkitPoint ? supabase.rpc("save_personal_visit_with_mapkit_point", { ...args,
-            selected_latitude: mapkitPoint.latitude, selected_longitude: mapkitPoint.longitude }) : supabase.rpc("save_personal_visit", { ...args })
-        : supabase.rpc("save_group_visit_destination", { ...args, target_group_id: destination.groupId!, expected_membership_id: destination.membershipId! }))
+        ? mapkitPoint ? supabase.rpc("save_personal_visit_with_mapkit_location", { ...args,
+            selected_latitude: mapkitPoint.latitude, selected_longitude: mapkitPoint.longitude,
+            selected_address: mapkitPoint.structured_address ?? null }) : supabase.rpc("save_personal_visit", { ...args })
+        : mapkitPoint ? supabase.rpc("save_group_visit_with_mapkit_location", { ...args, target_group_id: destination.groupId!,
+            expected_membership_id: destination.membershipId!, selected_latitude: mapkitPoint.latitude,
+            selected_longitude: mapkitPoint.longitude, selected_address: mapkitPoint.structured_address ?? null })
+            : supabase.rpc("save_group_visit_destination", { ...args, target_group_id: destination.groupId!, expected_membership_id: destination.membershipId! }))
         .setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
     if (response.error) {
         if (response.status >= 400 && response.status <= 599) throw new ServerRejection(response.error.code);
@@ -294,7 +301,9 @@ export class AddCoordinator {
                 } catch (error) {
                     this.replace(attempt.requestId, { status: definitive(error) ? "failed" : "uncertain",
                         message: definitive(error) ? error.code === "PGRST202" && attempt.submission.mapkitPoint
-                            ? "Apple Maps location saving needs the pending backend update. Nothing was saved to My Places."
+                            ? "Apple Maps location saving needs the pending backend update. Nothing was saved to this destination."
+                            : error.code === "GB001" ? "Not saved: this restaurant already has different Apple Maps details. Choose the saved restaurant to add a visit."
+                            : error.code === "GB002" ? "Not saved: only the group Owner can add Apple Maps details to an existing restaurant. Choose the saved restaurant to add a visit."
                             : "Not saved: the server rejected this attempt. Refresh permissions before retrying this destination." : failure });
                 }
             }

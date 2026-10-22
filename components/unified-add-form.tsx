@@ -90,6 +90,13 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
                     source = { name: facts.data.name, address: facts.data.address, cuisine: facts.data.cuisine,
                         apple_place_id: result.data.apple_place_id, destination_kind: "group", group_id: sourceGroupId, entry_id: result.data.id };
                 }
+                if (__DEV__ && source?.entry_id && source.destination_kind) {
+                    const locationArgs = { target_kind: source.destination_kind, target_entry_id: source.entry_id, expected_address: source.address };
+                    const location = await withRequestDeadline(signal => supabase.rpc("get_saved_mapkit_location", locationArgs)
+                        .setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
+                    if (location.error) throw location.error;
+                    if (location.data) source = { ...source, mapkit_point: location.data };
+                }
                 const selectedSource = source ?? initial.restaurant;
                 if (selectedSource.destination_kind === "group" && !m.data.some(row => row.group_id === selectedSource.group_id)) {
                     throw new Error("Source membership is no longer available.");

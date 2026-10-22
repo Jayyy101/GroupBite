@@ -1,11 +1,13 @@
 import { requireOptionalNativeModule } from "expo";
 import { Platform } from "react-native";
+import type { MapKitAddress } from "@/lib/mapkit-address";
 
 export type AppleSearchMode = "business" | "address";
 export type AppleSearchSuggestion = { id: string; title: string; subtitle: string };
 export type AppleSearchLocation = {
     id: string; placeId?: string; name: string; address: string; latitude: number; longitude: number;
     source: "apple-maps-preview"; kind: AppleSearchMode;
+    structuredAddress?: MapKitAddress;
 };
 export type MapKitSearchModule = {
     isAvailable(): boolean;

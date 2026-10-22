@@ -44,12 +44,18 @@ private final class MKLocalSearchCompleter: NSObject {
     self.results = results; isSearching = searching; delegate?.completerDidUpdateResults(self)
   }
 }
-private struct PostalAddress { var text: String }
+private struct PostalAddress {
+  var text: String
+  var street = "100 Native Street", city = "Native City", state = "CA", postalCode = "94538"
+  var country = "United States", isoCountryCode = "US"
+}
 private enum CNPostalAddressFormatter {
   enum Style { case mailingAddress }
   static func string(from address: PostalAddress, style: Style) -> String { address.text }
 }
 private struct Placemark {
+  var subThoroughfare: String?, thoroughfare: String?, locality: String?, administrativeArea: String?
+  var postalCode: String?, country: String?, isoCountryCode: String?
   var coordinate = CLLocationCoordinate2D(latitude: 37.553, longitude: -121.980)
   var postalAddress: PostalAddress? = PostalAddress(text: "Synthetic address\nFremont")
   var title: String? = "Synthetic address"
@@ -101,6 +107,53 @@ private final class MKLocalSearch {
 private func runTests() {
   var passed = 0
   func check(_ name: String, _ body: () -> Void) { body(); passed += 1; print("PASS " + name) }
+  check("Search, resolved completion and ID lookup retain native postal components independently of display text") {
+    let session = MapKitSearchSession()
+    var item = MKMapItem()
+    item.placemark.postalAddress = PostalAddress(text: "Unparseable display", street: "10 Native Street", city: "Native City",
+      state: "Native Region", postalCode: "12345", country: "Native Country", isoCountryCode: "xy")
+    let direct = Promise(), completed = Promise(), resolved = Promise(), lookup = Promise()
+    session.searchPlaces(query: "Native search", mode: "business", requestId: "901", promise: direct)
+    MKLocalSearch.instances.last!.finish([item])
+    session.complete(query: "Native search", mode: "business", requestId: "902", promise: completed)
+    MKLocalSearchCompleter.instances.last!.update([MKLocalSearchCompletion("Native")])
+    session.resolve(suggestionId: "902:0", requestId: "903", promise: resolved)
+    MKLocalSearch.instances.last!.finish([item])
+    session.lookupPlace(placeId: "Native ID", mode: "business", requestId: "904", promise: lookup)
+    MKMapItemRequest.instances.last!.finish(item)
+    for promise in [direct,resolved,lookup] {
+      let row = rows(promise)[0], address = row["structuredAddress"] as! [String: Any]
+      assert(row["address"] as? String == "Unparseable display")
+      assert(address["street"] as? String == "10 Native Street" && address["city"] as? String == "Native City")
+      assert(address["region"] as? String == "Native Region" && address["postal_code"] as? String == "12345")
+      assert(address["country"] as? String == "Native Country" && address["country_code"] as? String == "XY")
+    }
+  }
+  check("Missing postal components stay absent and street newlines remain native street text") {
+    let session = MapKitSearchSession(), promise = Promise()
+    var partial = MKMapItem(), missing = MKMapItem()
+    partial.placemark.postalAddress = PostalAddress(text: "Display", street: "10 Street\nUnit 2", city: "", state: "", postalCode: "", country: "", isoCountryCode: "")
+    missing.placemark.postalAddress = nil; missing.placemark.title = "Free text, Never infer a city"
+    session.searchPlaces(query: "Native search", mode: "business", requestId: "905", promise: promise)
+    MKLocalSearch.instances.last!.finish([partial,missing])
+    let address = rows(promise)[0]["structuredAddress"] as! [String: Any]
+    assert(address["street"] as? String == "10 Street Unit 2" && address["city"] is NSNull)
+    assert(rows(promise)[1]["structuredAddress"] == nil)
+  }
+  check("Missing postal addresses use native placemark fields without parsing the display string") {
+    let session = MapKitSearchSession(), promise = Promise()
+    var item = MKMapItem()
+    item.placemark.postalAddress = nil; item.placemark.title = "Opaque display"
+    item.placemark.subThoroughfare = "20"; item.placemark.thoroughfare = "Native Road"
+    item.placemark.locality = "Native Locality"; item.placemark.administrativeArea = "Native Region"
+    item.placemark.postalCode = "00123"; item.placemark.country = "Native Country"; item.placemark.isoCountryCode = "xy"
+    session.searchPlaces(query: "Native search", mode: "address", requestId: "906", promise: promise)
+    MKLocalSearch.instances.last!.finish([item])
+    let address = rows(promise)[0]["structuredAddress"] as! [String: Any]
+    assert(address["street"] as? String == "20 Native Road" && address["city"] as? String == "Native Locality")
+    assert(address["region"] as? String == "Native Region" && address["postal_code"] as? String == "00123")
+    assert(address["country_code"] as? String == "XY" && rows(promise)[0]["address"] as? String == "Opaque display")
+  }
   func rows(_ promise: Promise) -> [[String: Any]] { promise.value as! [[String: Any]] }
 
   check("Empty in-progress completion update cannot cancel later selectable results") {

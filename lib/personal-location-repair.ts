@@ -4,11 +4,12 @@ import { accountAccessToken } from "@/lib/account-session";
 import { listPersonalMapPins, type PersonalMapPin } from "@/lib/personal-map";
 import { withRequestDeadline } from "@/lib/request-deadline";
 import { supabase } from "@/lib/supabase";
+import { normalizeMapKitAddress, type MapKitAddress } from "@/lib/mapkit-address";
 import type { AddRestaurant, PersonalPlace, PersonalVisit } from "@/types/database";
 
 // Set false before friends testing; the helper also refuses dispatch when off.
 export const DEV_PERSONAL_LOCATION_REPAIR_ENABLED = true;
-export type RepairSnapshot = { place: PersonalPlace; visits: PersonalVisit[]; pin?: PersonalMapPin };
+export type RepairSnapshot = { place: PersonalPlace; visits: PersonalVisit[]; pin?: PersonalMapPin; address?: MapKitAddress };
 export type RepairReview = { status: "missing" | "present" | "confirmed" | "pending" | "uncertain" | "changed"; snapshot?: RepairSnapshot };
 type Point = NonNullable<AddRestaurant["mapkit_point"]>;
 type Attempt = { baseline: RepairSnapshot; point: Point; pending: boolean };
@@ -51,8 +52,15 @@ async function snapshot(userId: string, expected: PersonalPlace): Promise<Repair
     }
     if (visits.some(visit => visit.owner_user_id !== userId || visit.personal_place_id !== expected.id)) throw new Error("Could not verify visit ownership.");
     const pins = await listPersonalMapPins(userId, new AbortController().signal);
+    const locationToken = await accountAccessToken(userId);
+    const savedAddress = result.data.address;
+    const location = await withRequestDeadline(signal => supabase.rpc("get_saved_mapkit_location", {
+        target_kind: "personal", target_entry_id: expected.id, expected_address: savedAddress,
+    }).setHeader("Authorization", `Bearer ${locationToken}`).abortSignal(signal).retry(false));
+    if (location.error) throw new Error("Could not verify saved Apple Maps details.");
+    const address = normalizeMapKitAddress(location.data?.structured_address);
     await accountAccessToken(userId);
-    return { place: result.data, visits, pin: pins.find(pin => pin.id === expected.id) };
+    return { place: result.data, visits, pin: pins.find(pin => pin.id === expected.id), address };
 }
 
 export async function reviewPersonalLocationRepair(userId: string, expected: PersonalPlace): Promise<RepairReview> {
@@ -61,7 +69,9 @@ export async function reviewPersonalLocationRepair(userId: string, expected: Per
     if (!sameRow(current.place, attempt?.baseline.place ?? expected)
         || (attempt && !sameHistory(current.visits, attempt.baseline.visits))) return { status: "changed" };
     if (attempt) {
-        if (current.pin?.latitude === attempt.point.latitude && current.pin?.longitude === attempt.point.longitude) {
+        const details = attempt.point.structured_address;
+        if (current.pin?.latitude === attempt.point.latitude && current.pin?.longitude === attempt.point.longitude
+            && (!details || Object.entries(details).every(([field,value]) => value === null || current.address?.[field as keyof MapKitAddress] === value))) {
             return { status: "confirmed", snapshot: current };
         }
         // A missing point is NOT proof that a timed-out transaction rolled back.
@@ -80,7 +90,8 @@ export async function attachPersonalMapkitLocation(userId: string, baseline: Rep
         || !Number.isFinite(point.longitude) || Math.abs(point.longitude) > 180
         || (point.latitude === 0 && point.longitude === 0)) throw new Error("Select a fresh Apple Maps restaurant location.");
     if (baseline.place.owner_user_id !== userId || attempts.has(attemptKey)) throw new Error("Check the existing repair before continuing.");
-    const attempt: Attempt = { baseline, point: Object.freeze({ ...point }), pending: true };
+    const details = normalizeMapKitAddress(point.structured_address);
+    const attempt: Attempt = { baseline, point: Object.freeze({ ...point, structured_address: details }), pending: true };
     attempts.set(attemptKey, attempt); // synchronous lock, including preflight
     let dispatched = false;
     try {
@@ -91,9 +102,10 @@ export async function attachPersonalMapkitLocation(userId: string, baseline: Rep
         if (!canSend()) throw new Error("Repair paused before sending. Select the restaurant again.");
         dispatched = true;
         // Whitelist only location-only arguments. Never call an Add/visit RPC.
-        await withRequestDeadline(signal => supabase.rpc("set_personal_mapkit_location", {
+        await withRequestDeadline(signal => supabase.rpc("set_personal_mapkit_location_with_address", {
             target_personal_place_id: baseline.place.id, expected_revision: baseline.place.revision,
             expected_address: baseline.place.address, selected_latitude: point.latitude, selected_longitude: point.longitude,
+            selected_address: details ?? null,
         }).setHeader("Authorization", `Bearer ${token}`).abortSignal(signal).retry(false));
         // Even a successful/false/malformed response needs the same readback.
     } catch (error) {

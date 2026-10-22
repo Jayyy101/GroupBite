@@ -1,6 +1,7 @@
 import { getMapKitSearchModule, type AppleSearchLocation, type AppleSearchMode, type AppleSearchSuggestion,
     type MapKitSearchModule } from "@/modules/groupbite-mapkit-search";
 import { traceSearch } from "@/lib/search-diagnostics";
+import { normalizeMapKitAddress } from "@/lib/mapkit-address";
 
 export type { AppleSearchLocation, AppleSearchMode, AppleSearchSuggestion } from "@/modules/groupbite-mapkit-search";
 export const CHIPOTLE_COMPARISON_ID = "8b6fdcaf-5915-4d13-811b-bf62a9c87ac3";
@@ -122,7 +123,11 @@ function locations(result: unknown): AppleSearchLocation[] {
             throw new AppleSearchError("unavailable", UNAVAILABLE);
         }
         seen.add(row.id);
+        let structuredAddress;
+        try { structuredAddress = normalizeMapKitAddress(row.structuredAddress); }
+        catch { throw new AppleSearchError("unavailable", UNAVAILABLE); }
         return { id: row.id, ...(typeof row.placeId === "string" ? { placeId: row.placeId } : {}),
+            ...(structuredAddress ? { structuredAddress } : {}),
             name: row.name, address: row.address, latitude: row.latitude, longitude: row.longitude, source: row.source, kind: row.kind };
     });
 }

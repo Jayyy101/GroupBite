@@ -203,6 +203,28 @@ private final class MapKitSearchSession: NSObject, MKLocalSearchCompleterDelegat
     var location: [String: Any] = ["id": id, "name": name, "address": address,
       "latitude": coordinate.latitude, "longitude": coordinate.longitude,
       "source": "apple-maps-preview", "kind": mode]
+    // Prefer the postal address, falling back only to other native placemark
+    // fields. Locality is the city; subLocality is never promoted to a city.
+    func component(_ preferred: String?, fallback: String? = nil) -> Any {
+      for value in [preferred, fallback] {
+        guard let value else { continue }
+        let cleaned = value.components(separatedBy: .controlCharacters).joined(separator: " ")
+          .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleaned.isEmpty { return cleaned }
+      }
+      return NSNull()
+    }
+    let postal = item.placemark.postalAddress
+    let street = [item.placemark.subThoroughfare, item.placemark.thoroughfare].compactMap { $0 }.joined(separator: " ")
+    let components: [String: Any] = ["street": component(postal?.street, fallback: street),
+      "city": component(postal?.city, fallback: item.placemark.locality),
+      "region": component(postal?.state, fallback: item.placemark.administrativeArea),
+      "postal_code": component(postal?.postalCode, fallback: item.placemark.postalCode),
+      "country": component(postal?.country, fallback: item.placemark.country),
+      "country_code": component(postal?.isoCountryCode.uppercased(), fallback: item.placemark.isoCountryCode?.uppercased())]
+    if components.values.contains(where: { !($0 is NSNull) }) {
+      location["structuredAddress"] = components
+    }
     #if DEBUG
     if #available(iOS 18.0, *), let placeId = item.identifier?.rawValue, validPlaceId(placeId) {
       location["placeId"] = placeId

@@ -165,7 +165,8 @@ export function RestaurantSearch({ onSelect, disabled = false, selectionHint = "
                             setError("This result needs a shorter name or address. Enter the restaurant manually."); return;
                         }
                         Keyboard.dismiss(); choose.current({ name: item.name, address: item.address, cuisine: null, apple_place_id: item.placeId ?? null,
-                            mapkit_point: Object.freeze({ name: item.name, address: item.address, latitude: item.latitude, longitude: item.longitude }) });
+                            mapkit_point: Object.freeze({ name: item.name, address: item.address, latitude: item.latitude, longitude: item.longitude,
+                                ...(item.structuredAddress ? { structured_address: item.structuredAddress } : {}) }) });
                     }}><Text style={styles.cardTitle}>{item.name}</Text><Text style={[styles.message, styles.cardMessage]}>{item.address}</Text>
                     <Text style={[styles.secondaryText, styles.cardMessage]}>Use this restaurant</Text></Pressable>)}
         </>}

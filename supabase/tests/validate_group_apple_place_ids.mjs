@@ -10,8 +10,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
-const mapkitLocations = args.at(-1) === '--mapkit-locations';
-if (mapkitLocations) args.pop();
+const structuredMapkit = args.at(-1) === '--structured-mapkit';
+if (structuredMapkit) args.pop();
+const mapkitLocations = structuredMapkit || args.at(-1) === '--mapkit-locations';
+if (args.at(-1) === '--mapkit-locations') args.pop();
 const milestone18 = mapkitLocations || args.at(-1) === '--milestone18';
 if (args.at(-1) === '--milestone18') args.pop();
 assert(args.length === 4 && args[0] === '--postgres-bin' && args[2] === '--pg-module' && path.isAbsolute(args[1]) && path.isAbsolute(args[3]),
@@ -211,6 +213,38 @@ async function main() {
         for (const suite of ['group_apple_place_ids.sql','group_membership_lifecycle.sql','restaurant_catalog_privacy.sql','unified_add.sql']) {
             await admin.query("select set_config('groupbite.local_validation',$1,false)",[suite==='unified_add.sql'?'m18-unified-add':'group-apple-place-ids']);
             await admin.query(await source('tests/'+suite));console.log('PASS post-migration-17 regression: '+suite);
+        }
+    }
+    if (structuredMapkit) {
+        const preservedTables=[...tables,'personal_visits','add_destination_requests','personal_mapkit_locations','personal_mapkit_save_requests'];
+        const rows=async()=>Object.fromEntries(await Promise.all(preservedTables.map(async table=>[table,
+            (await admin.query(`select to_jsonb(t)${table==='personal_mapkit_locations'?" - 'structured_address'":''} row from public.${table} t
+                order by (to_jsonb(t)${table==='personal_mapkit_locations'?" - 'structured_address'":''})::text`)).rows])));
+        const beforeRows=await rows();
+        const oldFunctions=(await admin.query("select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where pronamespace='public'::regnamespace and prokind='f' order by oid")).rows;
+        const permissions=async()=>(await admin.query(`select oid,relacl::text,relrowsecurity,relforcerowsecurity from pg_class
+            where oid=any($1::regclass[]) order by oid`,[preservedTables.map(t=>'public.'+t)])).rows;
+        const policies=async()=>(await admin.query('select * from pg_policies where schemaname=\'public\' and tablename=any($1::text[]) order by tablename,policyname',[preservedTables])).rows;
+        const beforePermissions=await permissions(), beforePolicies=await policies();
+        await admin.query(await source('migrations/20261021001800_structured_mapkit_locations.sql'));
+        assert.deepEqual(await rows(),beforeRows);
+        assert.deepEqual(await permissions(),beforePermissions);assert.deepEqual(await policies(),beforePolicies);
+        assert.deepEqual((await admin.query('select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where oid=any($1::oid[]) order by oid',[oldFunctions.map(f=>f.oid)])).rows,oldFunctions);
+        assert.equal((await admin.query('select count(*)::int n from public.personal_mapkit_locations where structured_address is not null')).rows[0].n,0);
+        console.log('PASS migration 18 preserves every existing row, RPC body/grant, table grant and RLS policy');
+        await admin.query("select set_config('groupbite.local_validation','structured-mapkit',false)");
+        await admin.query(await source('tests/structured_mapkit_locations.sql'));
+        assert.deepEqual(await rows(),beforeRows);
+        console.log('PASS structured MapKit SQL contracts and transactional rollback');
+        await source('tests/structured_mapkit_locations_concurrency.mjs');
+        const {runStructuredMapkitConcurrency}=await import('./structured_mapkit_locations_concurrency.mjs');
+        await runStructuredMapkitConcurrency({admin,a,b,owner,other,member});
+        // The old point suite assumes an empty MapKit inventory and runs above
+        // before concurrent fixtures. Legacy point calls are also covered by the
+        // new SQL suite after migration 18.
+        for (const [suite,marker] of [['unified_add.sql','m18-unified-add'],['group_apple_place_ids.sql','group-apple-place-ids']]) {
+            await admin.query("select set_config('groupbite.local_validation',$1,false)",[marker]);
+            await admin.query(await source('tests/'+suite));console.log('PASS post-migration-18 regression: '+suite);
         }
     }
     for (const [file, hash] of hashes) assert.equal(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'), hash);
