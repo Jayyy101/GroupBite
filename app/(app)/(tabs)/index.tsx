@@ -1,5 +1,6 @@
 import { backendStyles } from "@/styles/backend";
 import { ScreenScaffold } from "@/components/screen-scaffold";
+import SavedMapShortcut from "@/components/saved-map-shortcut";
 import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
@@ -21,6 +22,8 @@ export default function Index() {
       >
         <Text style={backendStyles.secondaryText}>My Places</Text>
       </Pressable>
+
+      <SavedMapShortcut />
 
       <View style={styles.emptyState}>
         <Text style={styles.emptyStateTitle}>Your restaurants and visits</Text>

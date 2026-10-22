@@ -19,6 +19,7 @@ export type MapKitSearchModule = {
     lookupPlace?(placeId: string, mode: AppleSearchMode, requestId: string): Promise<unknown>;
     cancel(requestId: string): Promise<void>;
     reset(): Promise<void>;
+    requestCurrentLocation?(): Promise<{ status: string; latitude?: number; longitude?: number }>;
 };
 
 export function getMapKitSearchModule(): MapKitSearchModule | null {

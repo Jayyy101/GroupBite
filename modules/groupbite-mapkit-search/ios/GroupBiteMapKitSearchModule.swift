@@ -1,9 +1,11 @@
 import Contacts
+import CoreLocation
 import ExpoModulesCore
 import MapKit
 
 public final class GroupBiteMapKitSearchModule: Module {
   private let session = MapKitSearchSession()
+  private var location: MapLocationSession?
 
   public func definition() -> ModuleDefinition {
     Name("GroupBiteMapKitSearch")
@@ -20,6 +22,14 @@ public final class GroupBiteMapKitSearchModule: Module {
       #endif
       return false
     }
+    AsyncFunction("requestCurrentLocation") { (promise: Promise) in
+      #if DEBUG
+      if self.location == nil { self.location = MapLocationSession() }
+      self.location?.request(promise)
+      #else
+      promise.resolve(["status": "unavailable"])
+      #endif
+    }.runOnQueue(.main)
     AsyncFunction("complete") { (query: String, mode: String, requestId: String, promise: Promise) in
       #if DEBUG
       self.session.complete(query: query, mode: mode, requestId: requestId, promise: promise)
@@ -50,8 +60,59 @@ public final class GroupBiteMapKitSearchModule: Module {
     }.runOnQueue(.main)
     AsyncFunction("cancel") { (requestId: String) in self.session.cancel(requestId: requestId) }.runOnQueue(.main)
     AsyncFunction("reset") { self.session.reset() }.runOnQueue(.main)
-    OnAppEntersBackground { DispatchQueue.main.async { self.session.reset() } }
-    OnDestroy { DispatchQueue.main.async { self.session.reset() } }
+    OnAppEntersBackground { DispatchQueue.main.async { self.session.reset(); self.location?.cancel() } }
+    OnDestroy { DispatchQueue.main.async { self.session.reset(); self.location?.cancel() } }
+  }
+}
+
+// A button-initiated foreground request only. No persistence, background tracking,
+// search-region changes, or reuse as a saved restaurant coordinate.
+private final class MapLocationSession: NSObject, CLLocationManagerDelegate {
+  private let manager = CLLocationManager()
+  private var pending: Promise?
+  private var timeout: DispatchWorkItem?
+
+  override init() {
+    super.init()
+    manager.delegate = self
+    manager.desiredAccuracy = kCLLocationAccuracyHundredMeters
+  }
+  func request(_ promise: Promise) {
+    guard pending == nil else { promise.resolve(["status": "busy"]); return }
+    pending = promise
+    let work = DispatchWorkItem { [weak self] in self?.finish("timeout") }
+    timeout = work
+    DispatchQueue.main.asyncAfter(deadline: .now() + 15, execute: work)
+    guard CLLocationManager.locationServicesEnabled() else { finish("disabled"); return }
+    switch manager.authorizationStatus {
+    case .notDetermined: manager.requestWhenInUseAuthorization()
+    case .authorizedAlways, .authorizedWhenInUse: manager.requestLocation()
+    case .denied, .restricted: finish("denied")
+    @unknown default: finish("unavailable")
+    }
+  }
+  func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
+    guard pending != nil else { return }
+    switch manager.authorizationStatus {
+    case .authorizedAlways, .authorizedWhenInUse: manager.requestLocation()
+    case .denied, .restricted: finish("denied")
+    default: break
+    }
+  }
+  func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
+    guard let value = locations.last, value.horizontalAccuracy >= 0,
+      abs(value.timestamp.timeIntervalSinceNow) <= 60, CLLocationCoordinate2DIsValid(value.coordinate),
+      value.coordinate.latitude.isFinite, value.coordinate.longitude.isFinite else { finish("unavailable"); return }
+    finish("granted", coordinate: value.coordinate)
+  }
+  func locationManager(_ manager: CLLocationManager, didFailWithError error: Error) { finish("unavailable") }
+  func cancel() { finish("cancelled") }
+  private func finish(_ status: String, coordinate: CLLocationCoordinate2D? = nil) {
+    timeout?.cancel(); timeout = nil; manager.stopUpdatingLocation()
+    guard let promise = pending else { return }; pending = nil
+    if let coordinate {
+      promise.resolve(["status": status, "latitude": coordinate.latitude, "longitude": coordinate.longitude])
+    } else { promise.resolve(["status": status]) }
   }
 }
 

@@ -31,8 +31,8 @@ function MyPlaces({ userId }: { userId: string }) {
         <ScreenScaffold>
             <Text style={styles.title}>My Places</Text>
             <Text style={styles.message}>Only you can see these saved Places. They belong to your account.</Text>
-            {__DEV__ && Platform.OS === "ios" && <Pressable accessibilityRole="button" onPress={() => router.push("/dev-map")} style={styles.secondaryButton}>
-                <Text style={styles.secondaryText}>View My Places on Map</Text>
+            {__DEV__ && Platform.OS === "ios" && <Pressable accessibilityRole="button" onPress={() => router.push("/saved-map")} style={styles.secondaryButton}>
+                <Text style={styles.secondaryText}>View Saved Map</Text>
             </Pressable>}
             {loading ? <Text style={styles.message}>Loading My Places...</Text> : error !== "" ? <Text style={styles.error}>{error}</Text> : places.length === 0 ? <Text style={styles.message}>No personal places yet. Tap the Add tab at the bottom to save your first visit.</Text> : places.map(place => (
                 <Pressable key={place.id} accessibilityRole="button" onPress={() => router.push({ pathname: "/personal-place/[id]", params: { id: place.id } }, { withAnchor: true })} style={styles.card}>

@@ -12,23 +12,23 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import { Pressable, Text, View } from "react-native";
 
-export default function GroupRestaurantScreen({ fromAdd = false }: { fromAdd?: boolean }) {
+export default function GroupRestaurantScreen({ fromAdd = false, fromMap = false }: { fromAdd?: boolean; fromMap?: boolean }) {
     const router = useRouter();
     const { id, entryId } = useLocalSearchParams<{ id?: string | string[]; entryId?: string | string[] }>();
     const { session, loading } = useAuth();
     if (!loading && session && isUuid(id) && isUuid(entryId)) {
-        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} fromAdd={fromAdd} />;
+        return <RestaurantDetails key={`${session.user.id}:${id}:${entryId}`} groupId={id} entryId={entryId} userId={session.user.id} fromAdd={fromAdd} fromMap={fromMap} />;
     }
     return (
-        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => fromAdd ? (router.canGoBack() ? router.back() : router.replace("/add")) : router.dismissTo("/groups")}>
+        <ScreenScaffold edgeToEdge title="Restaurant" keyboardShouldPersistTaps="handled" onBack={() => fromAdd || fromMap ? (router.canGoBack() ? router.back() : router.replace(fromMap ? "/saved-map" : "/add")) : router.dismissTo("/groups")}>
             <Text style={styles.message}>{loading ? "Restoring your session..." : !session ? "Sign in to view group visits." : "This restaurant could not be found."}</Text>
         </ScreenScaffold>
     );
 }
 
-function RestaurantDetails({ groupId, entryId, userId, fromAdd }: { groupId: string; entryId: string; userId: string; fromAdd: boolean }) {
+function RestaurantDetails({ groupId, entryId, userId, fromAdd, fromMap }: { groupId: string; entryId: string; userId: string; fromAdd: boolean; fromMap: boolean }) {
     const router = useRouter();
-    const back = () => fromAdd ? (router.canGoBack() ? router.back() : router.replace("/add")) : router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
+    const back = () => fromAdd || fromMap ? (router.canGoBack() ? router.back() : router.replace(fromMap ? "/saved-map" : "/add")) : router.dismissTo({ pathname: "/group/[id]", params: { id: groupId } });
     const [restaurant, setRestaurant] = useState<GroupRestaurantSummary | null>(null);
     const [visits, setVisits] = useState<GroupVisit[]>([]);
     const [detailsLoading, setDetailsLoading] = useState(true);

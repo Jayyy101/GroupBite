@@ -6,10 +6,13 @@
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "groupbite",
-    "userInterfaceStyle": "automatic",
+    "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "Show your current location on your saved restaurant map when you tap the location button."
+      },
       "bundleIdentifier": "com.anonymous.GroupBite"
     },
     "android": {

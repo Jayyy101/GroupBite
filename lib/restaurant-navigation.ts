@@ -1,7 +1,7 @@
 import type { AddDestinationResult } from "@/types/database";
 
-export function personalPlaceHref(id: string, fromAdd = false) {
-    return { pathname: fromAdd ? "/add/personal-place/[id]" as const : "/personal-place/[id]" as const, params: { id } };
+export function personalPlaceHref(id: string, fromAdd = false, fromMap = false) {
+    return { pathname: fromAdd ? "/add/personal-place/[id]" as const : fromMap ? "/map/personal-place/[id]" as const : "/personal-place/[id]" as const, params: { id } };
 }
 
 export function destinationHref(result: AddDestinationResult, fromAdd = false) {

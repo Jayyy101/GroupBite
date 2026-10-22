@@ -149,8 +149,8 @@ async function failure(fn, rt) {
     await test('My Places exposes the map only in iOS development; releases redirect without data reads', async () => {
         for (const [development, platform, visible] of [[true, 'ios', true], [false, 'ios', false], [true, 'android', false]]) {
             const rt = runtime({ development, platform }), r = screen(rt, 'my-places'); await r.settle();
-            assert.equal(textOf(r.output).includes('View My Places on Map'), visible);
-            if (visible) { await click(r, 'View My Places on Map'); assert.equal(rt.world.navigation.at(-1), '/dev-map'); }
+            assert.equal(textOf(r.output).includes('View Saved Map'), visible);
+            if (visible) { await click(r, 'View Saved Map'); assert.equal(rt.world.navigation.at(-1), '/saved-map'); }
             r.unmount();
         }
         const f = setup({ development: false }), r = screen(f.rt, 'dev-map'); await r.settle();

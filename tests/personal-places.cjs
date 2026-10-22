@@ -130,7 +130,7 @@ function runtime(options = {}) {
     const mocks = {
         '@expo/vector-icons/Ionicons': { default: 'Icon' },
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
-        'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
+        'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Appearance: { setColorScheme() {} }, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
             useWindowDimensions: () => world.windowDimensions,
             Keyboard: { dismiss: () => world.keyboardDismissals++, metrics: () => world.keyboardMetrics,
                 addListener(event, listener) {
@@ -143,7 +143,8 @@ function runtime(options = {}) {
             Tabs: Object.assign(props => ({ type: 'Tabs', props: { ...props, children: [props.children, world.tabsScreen ? { type: world.tabsScreen, props: {} } : null] } }), { Screen: 'TabScreen' }),
             Stack: Object.assign(props => ({ type: 'Stack', props }), { Screen: 'StackScreen' }),
             useFocusEffect: cb => react.useEffect(() => world.focused ? cb() : undefined, [world.focused, cb]) },
-        '@react-navigation/native': { StackActions: { popToTop: () => ({ type: 'POP_TO_TOP' }) }, TabActions: { jumpTo: name => ({ type: 'JUMP_TO', payload: { name } }) }, useIsFocused: () => world.focused, useNavigation: () => navigation,
+        '@react-navigation/native': { ThemeProvider: 'ThemeProvider', DefaultTheme: { dark: false, colors: {}, fonts: {} },
+            StackActions: { popToTop: () => ({ type: 'POP_TO_TOP' }) }, TabActions: { jumpTo: name => ({ type: 'JUMP_TO', payload: { name } }) }, useIsFocused: () => world.focused, useNavigation: () => navigation,
             usePreventRemove(enabled, callback) {
                 const guard = react.useRef(); guard.current = { enabled, callback };
                 react.useEffect(() => { world.removalGuards.add(guard); return () => world.removalGuards.delete(guard); }, []);
@@ -155,6 +156,7 @@ function runtime(options = {}) {
             async setItem(key, value) { if(key !== 'savedPlaces') { world.journal.set(key,value);return; } world.localWrites++; world.local = value; },
             async removeItem(key) { assert.notEqual(key,'savedPlaces');world.journal.delete(key); } } },
         expo: { requireOptionalNativeModule: () => null },
+        'expo-status-bar': { StatusBar: 'StatusBar' },
         'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' },
         ...options.mocks,
         // Map fixtures add SafeAreaView; preserve the inset hook used by shared screens.

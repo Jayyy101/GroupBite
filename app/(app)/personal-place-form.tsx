@@ -18,17 +18,17 @@ import { AppState, Pressable, Text } from "react-native";
 
 const empty: Fields = { name: "", address: "", cuisine: null, visited_on: null, rating: null, would_go_again: null, notes: null };
 export default function PersonalPlaceFormScreen() {
-    const { id, fromAdd } = useLocalSearchParams<{ id: string | string[]; fromAdd?: string }>();
+    const { id, fromAdd, fromMap } = useLocalSearchParams<{ id: string | string[]; fromAdd?: string; fromMap?: string }>();
     const { session, loading } = useAuth();
     if (id === undefined) return <Redirect href="/add" />;
     // Account/record-scoped state survives temporary hiding; private UI does not.
     if (!loading && session) {
-        return <PersonalPlaceForm key={`${session.user.id}:${JSON.stringify(id)}`} userId={session.user.id} id={id} fromAdd={fromAdd === "1"} />;
+        return <PersonalPlaceForm key={`${session.user.id}:${JSON.stringify(id)}`} userId={session.user.id} id={id} fromAdd={fromAdd === "1"} fromMap={fromMap === "1"} />;
     }
-    return <PersonalAccess title="Edit Personal Place">{userId => <PersonalPlaceForm key={`${userId}:${JSON.stringify(id)}`} userId={userId} id={id} fromAdd={fromAdd === "1"} />}</PersonalAccess>;
+    return <PersonalAccess title="Edit Personal Place">{userId => <PersonalPlaceForm key={`${userId}:${JSON.stringify(id)}`} userId={userId} id={id} fromAdd={fromAdd === "1"} fromMap={fromMap === "1"} />}</PersonalAccess>;
 }
 
-function PersonalPlaceForm({ userId, id, fromAdd }: { userId: string; id: string | string[]; fromAdd: boolean }) {
+function PersonalPlaceForm({ userId, id, fromAdd, fromMap }: { userId: string; id: string | string[]; fromAdd: boolean; fromMap: boolean }) {
     const router = useRouter();
     const autocomplete = useAddressSearch();
     const baseline = useRef<Fields>(empty);
@@ -97,13 +97,13 @@ function PersonalPlaceForm({ userId, id, fromAdd }: { userId: string; id: string
         if (submitting.current) return;
         leave.requestLeave(() => {
             if (router.canGoBack()) router.back();
-            else if (isUuid(id)) router.replace(personalPlaceHref(id, fromAdd));
+            else if (isUuid(id)) router.replace(personalPlaceHref(id, fromAdd, fromMap));
             else router.replace("/my-places");
         });
     }
     function open(saved: PersonalPlace) {
         completed.current = true;
-        leave.finish(() => router.dismissTo(personalPlaceHref(saved.id, fromAdd), { withAnchor: true }));
+        leave.finish(() => router.dismissTo(personalPlaceHref(saved.id, fromAdd, fromMap), { withAnchor: true }));
     }
     function confirmed(saved: PersonalPlace, epoch: number) {
         if (!mounted.current) return;
@@ -140,7 +140,7 @@ function PersonalPlaceForm({ userId, id, fromAdd }: { userId: string; id: string
     }
     const form = <PersonalPlaceFormBody key={refresh} autocomplete={autocomplete} id={id} fields={fields} setFields={setFields} loading={loading || ((!editVerified || !verified.current) && !loadError)} loadError={loadError}
         error={error} busy={busy} blocked={blocked} back={back} save={save}
-        cancelEdit={() => { if (isUuid(id)) leave.requestLeave(() => router.dismissTo(personalPlaceHref(id, fromAdd), { withAnchor: true })); }}
+        cancelEdit={() => { if (isUuid(id)) leave.requestLeave(() => router.dismissTo(personalPlaceHref(id, fromAdd, fromMap), { withAnchor: true })); }}
         refresh={() => setRefresh(value => value + 1)} visibility={visibility} />;
     const guardedForm = <>{leave.confirmation}{form}</>;
     return <PersonalAccess title="Edit Personal Place">{() => guardedForm}</PersonalAccess>;
