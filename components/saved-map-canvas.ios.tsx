@@ -16,17 +16,18 @@ export default forwardRef<MapCanvasHandle, MapCanvasProps>(function SavedMapCanv
         // full overlay insets here doubles them and frames far too much area.
         else if (coordinates.length) map.current?.fitToCoordinates(coordinates, { edgePadding: { top: 20, right: 20, bottom: 20, left: 20 }, animated: true });
     };
-    useImperativeHandle(ref, () => ({ fit, focus, zoom: direction => {
+    useImperativeHandle(ref, () => ({ captureCamera: async () => map.current?.getCamera() ?? null, fit, focus, zoom: direction => {
         const current = region.current;
         if (current) map.current?.animateToRegion({ ...current,
             latitudeDelta: Math.min(160, Math.max(0.0005, current.latitudeDelta * (direction === 1 ? 0.5 : 2))),
             longitudeDelta: Math.min(360, Math.max(0.0005, current.longitudeDelta * (direction === 1 ? 0.5 : 2))) }, 250);
     } }));
     return <MapView ref={map} style={StyleSheet.absoluteFill} provider={PROVIDER_DEFAULT} mapType="mutedStandard" userInterfaceStyle="light"
-        initialRegion={props.initialRegion ?? { latitude: 20, longitude: 0, latitudeDelta: 100, longitudeDelta: 160 }}
+        initialCamera={props.initialCamera ?? undefined}
+        initialRegion={props.initialCamera ? undefined : props.initialRegion ?? { latitude: 20, longitude: 0, latitudeDelta: 100, longitudeDelta: 160 }}
         mapPadding={props.padding} scrollEnabled zoomEnabled rotateEnabled pitchEnabled showsCompass showsScale
         showsPointsOfInterest={false} showsUserLocation={props.showUser} showsMyLocationButton={false}
-        onMapReady={() => { ready.current = true; if (!props.initialRegion) fit(); }}
+        onMapReady={() => { ready.current = true; if (!props.initialRegion && !props.initialCamera) fit(); }}
         onRegionChangeComplete={value => { region.current = value; props.onRegion(value); }} onPress={props.onDismiss}>
         {props.restaurants.flatMap(r => r.coordinate ? [<Marker key={r.key} identifier={r.key} coordinate={r.coordinate}
             accessibilityLabel={`${r.name}, ${r.sources.map(s => s.label).join(", ")}`}

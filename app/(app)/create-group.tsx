@@ -36,7 +36,7 @@ function CreateGroupForm({ userId }: { userId: string }) {
     // The unsent one-field draft is route-local; only pending/uncertain work guards exits.
     const leave = useLeaveGuard({ userId, dirty: false, busy,
         uncertain: creation.attempt?.status === "uncertain",
-        uncertainExitMessage: "The group may already have been created, or may still finish. Leaving does not cancel the request or unlock another creation. Return to Groups to review it before starting a separate group.",
+        uncertainExitMessage: "The group may already have been created, or may still finish. Leaving does not cancel the request or unlock another creation. Return to Collections to review it before starting a separate group.",
         onDiscard: () => { setName(""); setError(""); } });
 
     useEffect(() => {
@@ -105,7 +105,7 @@ function CreateGroupForm({ userId }: { userId: string }) {
         {creation.attempt && <Text accessibilityLiveRegion="polite" style={creation.attempt.status === "uncertain" ? styles.error : styles.message}>
             Creation of &quot;{creation.attempt.name}&quot; is {creation.attempt.status === "uncertain" ? "unconfirmed" : "in progress"}. Another creation is locked; no automatic retry will occur.
         </Text>}
-        {created && <Text accessibilityLiveRegion="polite" style={styles.message}>Group created. Return to Groups to view it.</Text>}
+        {created && <Text accessibilityLiveRegion="polite" style={styles.message}>Group created. Return to Collections to view it.</Text>}
         <Text style={styles.label}>New group name</Text>
         <TextInput accessibilityLabel="New group name" value={name} onChangeText={setName}
             placeholder="Enter a group name" placeholderTextColor="#79665E" maxLength={100}
@@ -119,7 +119,7 @@ function CreateGroupForm({ userId }: { userId: string }) {
             <Text style={styles.secondaryText}>Review Groups After Creation</Text>
         </Pressable>}
         <Pressable accessibilityRole="button" disabled={busy} onPress={returnToGroups} style={[styles.secondaryButton, busy && styles.disabled]}>
-            <Text style={styles.secondaryText}>{created ? "View Groups" : "Cancel"}</Text>
+            <Text style={styles.secondaryText}>{created ? "View Collections" : "Cancel"}</Text>
         </Pressable>
     </ScreenScaffold>;
 }

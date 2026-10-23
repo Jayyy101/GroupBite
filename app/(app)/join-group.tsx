@@ -199,7 +199,7 @@ function JoinGroupForm({ userId }: { userId: string }) {
         {requestMessage !== "" && <Text accessibilityLiveRegion="polite" style={styles.message}>{requestMessage}</Text>}
         {error !== "" && <Text accessibilityLiveRegion="polite" style={styles.error}>{error}</Text>}
         <Pressable accessibilityRole="button" disabled={busy} onPress={returnToGroups} style={[styles.secondaryButton, busy && styles.disabled]}>
-            <Text style={styles.secondaryText}>{requestMessage ? "Return to Groups" : "Cancel"}</Text>
+            <Text style={styles.secondaryText}>{requestMessage ? "Return to Collections" : "Cancel"}</Text>
         </Pressable>
         <Text accessibilityRole="header" style={styles.label}>Your join requests</Text>
         {loadError !== "" && <Text accessibilityLiveRegion="polite" style={styles.error}>{loadError}</Text>}
@@ -209,7 +209,7 @@ function JoinGroupForm({ userId }: { userId: string }) {
                 return <View key={request.id} style={styles.card}>
                     <Text style={styles.cardTitle}>{request.status === "pending" ? "Pending approval" : request.status === "denied" ? "Denied" : currentMember ? "Approved" : "Previously approved"}</Text>
                     {request.status === "approved" && <Text style={styles.message}>{currentMember
-                        ? "This group is available in Groups."
+                        ? "This group is available in Collections."
                         : "This past approval does not grant current access. To rejoin, request access with an active invite code."}</Text>}
                     <Text style={styles.message}>Requested {new Date(request.requested_at).toLocaleDateString()}</Text>
                 </View>;

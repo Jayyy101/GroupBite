@@ -328,7 +328,7 @@ function deadlines() {
         assert.equal(f.rt.world.groupRoute, 'create'); assert.equal(f.creation().attempt, null);
         await resume(f.rt, f.r); assert(textOf(f.r.output).includes('Group created.'));
         assert(button(f.r, 'Create Group').props.disabled); await submit();
-        assert.equal(creations(f.rt).length, 1); await click(f.r, 'View Groups');
+        assert.equal(creations(f.rt).length, 1); await click(f.r, 'View Collections');
         assert.equal(f.rt.world.groupRoute, 'groups'); f.r.unmount();
     });
     console.log(`${passed} Milestone 17 safety regression checks passed.`);

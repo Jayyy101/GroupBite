@@ -62,12 +62,20 @@ export default function HomeScreen() {
     const loading = dashboard.status === "loading";
     const { recent, groups, collectionStatistics: statistics } = dashboard;
 
-    return <ScreenScaffold scrollRef={scrollRef} contentContainerStyle={styles.content}>
+    return <ScreenScaffold key={fontScale} scrollRef={scrollRef} contentContainerStyle={styles.content}>
         <View style={styles.header}>
             <Text style={styles.welcome}>Welcome back!</Text>
             <Text accessibilityRole="header" style={styles.title}>Your food memories</Text>
             <Text style={styles.subtitle}>Your own favorites, and memories with friends.</Text>
         </View>
+
+        <Pressable accessibilityRole="button" accessibilityLabel="Open My Places, your private collection"
+            onPress={() => router.push("/home/my-places", { withAnchor: true })}
+            style={({ pressed }) => [styles.groupCard, pressed && styles.pressed]}>
+            <Ionicons name="lock-closed-outline" size={23} color="#C9472C" accessible={false} />
+            <View style={styles.cardBody}><Text style={styles.cardTitle}>My Places</Text><Text style={styles.caption}>Your private restaurant collection</Text></View>
+            <Ionicons name="chevron-forward" size={18} color="#79665E" accessible={false} />
+        </Pressable>
 
         <View style={styles.sectionHeading}>
             <Text accessibilityRole="header" style={styles.sectionTitle}>At a glance</Text>
@@ -144,7 +152,7 @@ export default function HomeScreen() {
             </View>
             {groups.status === "loading" ? <LoadingRows label="Loading your groups…" /> : groups.status === "error" ?
                 <Text accessibilityLiveRegion="polite" style={styles.notice}>Your groups are unavailable. Refresh to check access.</Text> : <>
-                    {groups.data.length === 0 && <Text style={styles.empty}>No groups yet. Shared memories start in Groups.</Text>}
+                    {groups.data.length === 0 && <Text style={styles.empty}>No groups yet. Create or join one in Collections.</Text>}
                     {groups.data.map(group => <Pressable key={`${group.id}:${group.membershipId}`} accessibilityRole="button"
                         accessibilityLabel={`Open group ${group.name}, ${group.role}`}
                         onPress={() => router.push(groupHref(group.id, "home"), { withAnchor: true })}

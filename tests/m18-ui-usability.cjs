@@ -139,12 +139,19 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
             {id:uuid(14),personal_place_id:uuid(3),owner_user_id:'a',rating:null}, {id:uuid(15),personal_place_id:uuid(4),owner_user_id:'b',rating:5}];
         const r=screen(rt,'my-places');await r.settle();
         const cards=nodes(r.output).filter(n=>n.type==='Pressable'&&nodes(n).some(n=>n.type==='Icon'&&n.props.name==='chevron-forward'));
-        assert.equal(cards.length,3);assert(textOf(cards[0]).includes('Average 2.0/5 · 2 rated / 3 total visits'));
-        assert(textOf(cards[1]).includes('No ratings yet · 0 rated / 0 total visits'));assert(textOf(cards[2]).includes('No ratings yet · 0 rated / 1 total visits'));
+        assert.equal(cards.length,3);assert(cards[0].props.accessibilityLabel.includes('Average 2.0/5 · 2 rated / 3 total visits'));
+        assert(cards[1].props.accessibilityLabel.includes('No ratings yet · 0 rated / 0 total visits'));assert(cards[2].props.accessibilityLabel.includes('No ratings yet · 0 rated / 1 total visits'));
         assert(!textOf(r.output).includes('Foreign Cafe'));assert(!textOf(r.output).includes('Latest rating'));
         for(const c of rt.world.requests.filter(c=>c.url.pathname==='/rest/v1/personal_visits')){
             assert.equal(c.url.searchParams.get('select'),'id,personal_place_id,rating');assert.equal(c.url.searchParams.get('owner_user_id'),'eq.a');assert.equal(c.user,'a');}
         assert(rt.world.requests.every(c=>c.method==='GET'));r.unmount();
+    });
+    await test('Live large text remeasures My Places without remounting its private read controller',async()=>{
+        const rt=runtime();rt.world.rows=[fixture()];const r=screen(rt,'my-places');await r.settle();const reads=rt.world.requests.length;
+        rt.world.windowDimensions={...rt.world.windowDimensions,fontScale:2.143};r.dirty=true;await r.settle();
+        const title=nodes(r.output).find(n=>n.props?.accessibilityRole==='header'&&textOf(n)==='My Places');
+        assert.equal(flatten(title.props.style).fontSize,30);assert.equal(title.props.allowFontScaling,undefined);
+        assert(textOf(r.output).includes('Private Cafe'));assert.equal(rt.world.requests.length,reads);assert.equal(nodes(r.output).filter(n=>n.type==='ScrollView').length,1);r.unmount();
     });
     await test('History summaries page past server row caps using only owner-scoped rating facts',async()=>{
         const history=Array.from({length:5},(_,i)=>({id:uuid(i+10),personal_place_id:fixture().id,rating:i===4?null:i+1}));
@@ -162,9 +169,9 @@ async function test(label,fn){await fn();passed++;console.log('PASS '+label);}
         const r=screen(rt,'my-places');await r.settle();assert(!textOf(r.output).includes('Private Cafe'));assert(!textOf(r.output).includes('0 total visits'));
         assert(!textOf(r.output).includes('Tap the Add tab'));
         rt.world.override=null;rt.world.rows=[];await click(r,'Refresh My Places');
-        assert(textOf(r.output).includes('No personal places yet. Tap the Add tab at the bottom to save your first visit.'));
+        assert(textOf(r.output).includes('Your collection starts with a visit. Use Add to save your first restaurant to My Places.'));
         assert(!textOf(r.output).includes('Add a Restaurant'));
-        rt.world.rows=[fixture()];await click(r,'Refresh My Places');assert(textOf(r.output).includes('No ratings yet · 0 rated / 0 total visits'));
+        rt.world.rows=[fixture()];await click(r,'Refresh My Places');assert(nodes(r.output).some(n=>n.props?.accessibilityLabel?.includes('No ratings yet · 0 rated / 0 total visits')));
         assert(!textOf(r.output).includes('Tap the Add tab'));assert(!textOf(r.output).includes('Add a Restaurant'));r.unmount();
     });
     await test('Account replacement hides pending history summaries and stops the old account paging',async()=>{

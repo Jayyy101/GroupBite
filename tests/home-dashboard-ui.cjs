@@ -218,7 +218,7 @@ async function test(name, run) { await run(); passed++; console.log('PASS ' + na
 
     await test('Home leaves all five existing tabs and their navigation behavior available', async () => {
         const f = model({ tabs: true }); await f.r.settle();
-        assert.deepEqual(nodes(f.r.output).filter(n => n.type === 'TabScreen').map(n => n.props.options.title), ['Home', 'My Places', 'Add', 'Groups', 'Account']);
+        assert.deepEqual(nodes(f.r.output).filter(n => n.type === 'TabScreen').map(n => n.props.options.title), ['Home', 'Map', 'Add', 'Collections', 'Account']);
         assert(textOf(f.r.output).includes('Your food memories'));
         const tabs = nodes(f.r.output).find(n => n.type === 'Tabs');
         assert.equal(tabs.props.screenOptions({ route: { name: '(home)' } }).popToTopOnBlur, true);

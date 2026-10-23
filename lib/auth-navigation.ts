@@ -5,7 +5,7 @@ export function safeAuthReturnTo(value: unknown): string {
     const path = value.split("?")[0];
     if (path.split("/").some(segment => segment === "." || segment === "..")) return "/";
     if (["/", "/my-places", "/groups", "/add", "/account", "/add-visit", "/personal-place-form", "/personal-visit-form",
-        "/create-group", "/join-group", "/saved-places", "/add-place", "/dev-map", "/dev-apple-search", "/saved-map", "/home/saved-map"].includes(path)
+        "/create-group", "/join-group", "/saved-places", "/add-place", "/dev-map", "/dev-apple-search", "/saved-map", "/home/saved-map", "/home/my-places"].includes(path)
         || /^\/(?:personal-place|place)\/[^/?%]+$/.test(path)
         || /^\/group\/[^/?%]+(?:\/restaurant\/[^/?%]+)?$/.test(path)
         || /^\/home\/(?:personal-place\/[^/?%]+|group\/[^/?%]+(?:\/restaurant\/[^/?%]+)?)$/.test(path)

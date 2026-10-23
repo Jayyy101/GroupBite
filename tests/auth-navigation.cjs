@@ -185,7 +185,7 @@ function layoutRuntime() {
         const rt = runtime({ mocks: { '@expo/vector-icons/Ionicons': { default: 'Icon' },
             'expo-router': { Tabs: Object.assign(props => ({ type: 'Tabs', props }), { Screen: 'TabScreen' }) } } });
         const tabs = screen(rt, '(app)/(tabs)/_layout'); await tabs.settle();
-        assert.deepEqual(nodes(tabs.output).filter(n => n.type === 'TabScreen').map(n => n.props.options.title), ['Home', 'My Places', 'Add', 'Groups', 'Account']); tabs.unmount();
+        assert.deepEqual(nodes(tabs.output).filter(n => n.type === 'TabScreen').map(n => n.props.options.title), ['Home', 'Map', 'Add', 'Collections', 'Account']); tabs.unmount();
         const keys = fs.readdirSync(path.join(__dirname, '../app'), { recursive: true }).filter(p => p.endsWith('.tsx')).map(p => './' + p);
         const context = key => ({ default: () => null, ...(key.endsWith('_layout.tsx') ? {
             unstable_settings: rt.load('app/' + key.slice(2, -4)).unstable_settings,
@@ -194,7 +194,7 @@ function layoutRuntime() {
         const config = require('expo-router/build/getReactNavigationConfig').getReactNavigationConfig(tree, true);
         const { getStateFromPath } = routerModule('fork/getStateFromPath.js');
         const paths = ['/', '/my-places', '/add', '/groups', '/account', '/add-visit?groupId=a', '/personal-place-form?id=b',
-            '/personal-place/a', '/group/a', '/group/a/restaurant/b', '/saved-places', '/place/a', '/add-place?id=a', '/dev-map', '/dev-apple-search', '/home/personal-place/a', '/home/group/a', '/home/group/a/restaurant/b', '/home/saved-map'];
+            '/personal-place/a', '/group/a', '/group/a/restaurant/b', '/saved-places', '/place/a', '/add-place?id=a', '/dev-map', '/dev-apple-search', '/home/personal-place/a', '/home/group/a', '/home/group/a/restaurant/b', '/home/saved-map', '/home/my-places'];
         for (const url of paths) {
             const state = getStateFromPath(url, config), app = state.routes.at(-1);
             assert.equal(app.name, '(app)', url); assert(app.state, url);
@@ -204,7 +204,7 @@ function layoutRuntime() {
         assert.equal(appNode.children.find(n => n.route === '(tabs)').children.length, 5);
         // Exercise installed routing action selection across the new tab/stack boundary.
         const stack = StackRouter({}), tab = TabRouter({ backBehavior: 'history', initialRouteName: '(home)' });
-        const tabOptions = { routeNames: ['(home)', '(my-places)', 'add', '(groups)', '(account)'], routeParamList: {}, routeGetIdList: {} };
+        const tabOptions = { routeNames: ['(home)', '(map)', 'add', '(groups)', '(account)'], routeParamList: {}, routeGetIdList: {} };
         let tabState = tab.getInitialState(tabOptions);
         const appOptions = { routeNames: appNode.children.map(n => n.route), routeParamList: {}, routeGetIdList: {} };
         let appState = stack.getRehydratedState({ stale: true, routes: [{ name: '(tabs)', state: tabState }, { name: 'add-visit' }], index: 1 }, appOptions);

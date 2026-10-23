@@ -5,14 +5,15 @@ import type { MapPanelState } from "@/lib/saved-map-panel";
 import { useSavedMap } from "@/hooks/use-saved-map";
 import { filterMapRestaurants, groupMapRestaurants, inMapRegion, mapSourceHref, validMapCoordinate } from "@/lib/saved-map-model";
 import { getMapKitSearchModule } from "@/modules/groupbite-mapkit-search";
-import type { MapCanvasHandle, MapRegion, MapRestaurant } from "@/types/saved-map";
+import type { MapCanvasHandle, MapRegion, MapRestaurant, MapSource } from "@/types/saved-map";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useRouter } from "expo-router";
 import { useEffect, useRef, useState, type ComponentProps } from "react";
 import { ActivityIndicator, AppState, FlatList, Pressable, ScrollView, StyleSheet, Text, useWindowDimensions, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import type { Camera } from "react-native-maps";
 
-export default function SavedMapScreen({ userId, origin = "map" }: { userId: string; origin?: DetailOrigin }) {
+export default function SavedMapScreen({ userId, origin = "map", tabRoot = false }: { userId: string; origin?: DetailOrigin; tabRoot?: boolean }) {
     const router = useRouter(), insets = useSafeAreaInsets(), map = useRef<MapCanvasHandle>(null);
     const list = useRef<FlatList<MapRestaurant>>(null);
     const read = useSavedMap(userId);
@@ -22,6 +23,7 @@ export default function SavedMapScreen({ userId, origin = "map" }: { userId: str
     const [topHeight, setTopHeight] = useState(116);
     const [viewport, setViewport] = useState<MapRegion | null>(null);
     const camera = useRef<MapRegion | null>(null), fitRequested = useRef(false);
+    const nativeCamera = useRef<Camera | null>(null), openingDetail = useRef(false);
     const [locating, setLocating] = useState(false), [showUser, setShowUser] = useState(false), [locationMessage, setLocationMessage] = useState("");
     const [locationResult, setLocationResult] = useState<{ status: string; latitude?: number; longitude?: number } | null>(null);
     const locationGeneration = useRef(0), locationPending = useRef(false), eligible = useRef(false);
@@ -96,6 +98,26 @@ export default function SavedMapScreen({ userId, origin = "map" }: { userId: str
             style={({ pressed }) => [s.circle, pressed && s.pressed, disabled && { opacity: 0.5 }]}>
             <Ionicons name={icon} size={22} color="#C9472C" accessible={false} />
         </Pressable>;
+    async function openDetails(source: MapSource) {
+        const data = visibleData.current;
+        if (!eligible.current || !data || openingDetail.current) return;
+        openingDetail.current = true;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            // Rotation/pitch alone may not emit a region event. Capture just
+            // before leaving; a stalled native read must not trap navigation.
+            const snapshot = await Promise.race([
+                map.current?.captureCamera?.() ?? Promise.resolve(null),
+                new Promise<null>(resolve => { timer = setTimeout(() => resolve(null), 400); }),
+            ]).catch(() => null);
+            if (!eligible.current || visibleData.current !== data) return;
+            nativeCamera.current = snapshot;
+            router.push(mapSourceHref(source, origin));
+        } finally {
+            if (timer !== undefined) clearTimeout(timer);
+            openingDetail.current = false;
+        }
+    }
     function card(restaurant: MapRestaurant, detail = false) {
         const sources = sourcesFor(restaurant);
         const city = restaurant.sources.find(source => source.structured?.city)?.structured?.city;
@@ -118,7 +140,7 @@ export default function SavedMapScreen({ userId, origin = "map" }: { userId: str
                     const facts = [stats?.visitCount != null ? `${stats.visitCount} ${stats.visitCount === 1 ? "visit" : "visits"}` : null,
                         stats?.rating != null ? `${stats.ratingKind === "latest" ? "Latest rating" : "Avg rating"} ${Number(stats.rating.toFixed(1))}/5` : null].filter(Boolean).join(" · ");
                     return <Pressable key={source.key} accessibilityRole="button" accessibilityLabel={`Open ${restaurant.name} in ${source.label}`}
-                        onPress={() => { if (eligible.current && read.data && visibleData.current === read.data) router.push(mapSourceHref(source, origin)); }} style={({ pressed }) => [s.source, pressed && s.pressed]}>
+                        onPress={() => { void openDetails(source); }} style={({ pressed }) => [s.source, pressed && s.pressed]}>
                         <Ionicons name={source.kind === "personal" ? "lock-closed-outline" : "people-outline"} size={18} color="#A33720" accessible={false} />
                         <View style={s.rowBody}><Text style={s.sourceText}>{source.label}</Text>{!!facts && <Text style={s.caption}>{facts}</Text>}</View>
                         <Ionicons name="chevron-forward" size={17} color="#A33720" accessible={false} />
@@ -129,13 +151,14 @@ export default function SavedMapScreen({ userId, origin = "map" }: { userId: str
     }
     return <View style={s.screen} onLayout={e => setHeight(e.nativeEvent.layout.height)}>
         {read.eligible && read.data && <SavedMapCanvas ref={map} restaurants={restaurants} selected={selected?.key ?? null}
-            initialRegion={camera.current} showUser={showUser} padding={{ top: controlsTop + 50, bottom: panelHeights.compact + 24, left: 34, right: 60 }}
+            initialRegion={camera.current} initialCamera={nativeCamera.current}
+            showUser={showUser} padding={{ top: controlsTop + 50, bottom: panelHeights.compact + 24, left: 34, right: 60 }}
             onSelect={choose} onDismiss={() => { setSelection(null); setPanel("collapsed"); }}
             onRegion={value => { camera.current = value; setViewport(value); }} />}
         <View style={[s.top, { top: insets.top + 6 }]} pointerEvents="box-none" onLayout={e => setTopHeight(e.nativeEvent.layout.height)}>
             <View style={s.heading}>
-                {button("Back", "chevron-back", () => backToContext(router, origin === "home" ? "/" : "/my-places"))}
-                <Text numberOfLines={1} maxFontSizeMultiplier={1.4} adjustsFontSizeToFit style={s.title}>Saved Map</Text>
+                {!tabRoot && button("Back", "chevron-back", () => backToContext(router, origin === "home" ? "/" : "/my-places"))}
+                <Text numberOfLines={1} maxFontSizeMultiplier={1.4} adjustsFontSizeToFit style={s.title}>{tabRoot ? "Map" : "Saved Map"}</Text>
                 {button("Refresh saved map", "refresh", read.refresh, read.loading)}
             </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={s.filters}>

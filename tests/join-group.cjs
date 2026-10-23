@@ -56,7 +56,7 @@ async function uncertain(f, result = () => response({ message: 'Response lost' }
         assert(textOf(r.output).includes('Owner must approve')); assert(textOf(r.output).includes('Pending approval'));
         assert.equal(rt.world.navigation.length, 0); assert.deepEqual(state.groups, []);
         await submit(); await r.settle(); assert.equal(writes(rt).length, 1, 'Retained draft callback cannot resend');
-        await click(r, 'Return to Groups'); assert.equal(rt.world.navigation.at(-1), '/groups');
+        await click(r, 'Return to Collections'); assert.equal(rt.world.navigation.at(-1), '/groups');
         assert.equal(rt.world.localReads, 0); assert.equal(rt.world.localWrites, 0); r.unmount();
     });
     await test('Join preserves safe invalid/pending/member errors and never exposes raw database diagnostics', async () => {
@@ -79,9 +79,9 @@ async function uncertain(f, result = () => response({ message: 'Response lost' }
         const { rt, r, state } = await setup();
         state.rows = [request('pending', 'pending'), request('denied', 'denied'), request('old', 'approved'), request(groupId, 'approved')];
         state.groups = [{ id: groupId }]; await click(r, 'Refresh Requests');
-        for (const label of ['Pending approval', 'Denied', 'Previously approved', 'Approved', 'This group is available in Groups.', 'does not grant current access']) assert(textOf(r.output).includes(label));
+        for (const label of ['Pending approval', 'Denied', 'Previously approved', 'Approved', 'This group is available in Collections.', 'does not grant current access']) assert(textOf(r.output).includes(label));
         assert(!nodes(r.output).some(n => n.type === 'Pressable' && /^(Approve|Deny)$/.test(textOf(n.props.children))));
-        state.groups = []; rt.poll(); await r.settle(); assert(!textOf(r.output).includes('This group is available in Groups.'));
+        state.groups = []; rt.poll(); await r.settle(); assert(!textOf(r.output).includes('This group is available in Collections.'));
         state.readError = true; await click(r, 'Refresh Requests');
         assert(textOf(r.output).includes('Could not load your join requests.')); assert(!textOf(r.output).includes('Pending approval'));
         state.readError = false; await click(r, 'Refresh Requests'); assert(textOf(r.output).includes('Pending approval'));
@@ -315,8 +315,8 @@ async function uncertain(f, result = () => response({ message: 'Response lost' }
             assert(!textOf(r.output).includes('Add Restaurant / Visit'));
             assert(!textOf(r.output).includes('Add your first visit above!'));
             if (role !== 'revoked') {
-                assert(textOf(r.output).includes('No restaurants yet. Tap the Add tab at the bottom to save a visit.'));
-                assert(textOf(r.output).includes(role === 'owner' ? 'You are the Owner.' : 'You are a Member.'));
+                assert(textOf(r.output).includes('Use Add to share a visit with this group.')); assert(!textOf(r.output).includes('Current members')); await click(r, 'People & settings');
+                assert(textOf(r.output).replace(/\s+/g,' ').includes(role === 'owner' ? 'You are the Owner' : 'You are a Member'));
                 assert.equal(button(r, 'Leave Group').props.disabled, role === 'owner');
                 assert(!button(r, 'Refresh Group').props.disabled);
                 if (role === 'owner') {

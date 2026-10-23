@@ -10,7 +10,7 @@ import { KeyboardAvoidingView, Platform } from "react-native";
 export const unstable_settings = { initialRouteName: "(home)" };
 
 const icons: Record<string, ComponentProps<typeof Ionicons>["name"]> = {
-    "(home)": "home-outline", "(my-places)": "bookmark-outline", add: "add-circle-outline",
+    "(home)": "home-outline", "(map)": "map-outline", add: "add-circle-outline",
     "(groups)": "people-outline", "(account)": "person-circle-outline",
 };
 
@@ -40,9 +40,9 @@ export default function TabLayout() {
                 tabBarIcon: ({ color, size }) => <Ionicons name={icons[route.name]} color={color} size={size} />,
             })}>
                 <Tabs.Screen name="(home)" options={{ title: "Home" }} />
-                <Tabs.Screen name="(my-places)" options={{ title: "My Places" }} />
+                <Tabs.Screen name="(map)" options={{ title: "Map" }} />
                 <Tabs.Screen name="add" options={{ title: "Add" }} />
-                <Tabs.Screen name="(groups)" options={{ title: "Groups" }} />
+                <Tabs.Screen name="(groups)" options={{ title: "Collections" }} />
                 <Tabs.Screen name="(account)" options={{ title: "Account" }} />
             </Tabs>
         </KeyboardAvoidingView>

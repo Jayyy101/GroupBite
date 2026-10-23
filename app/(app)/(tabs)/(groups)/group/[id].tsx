@@ -1,10 +1,11 @@
 import { backToContext, destinationHref, type DetailOrigin } from "@/lib/restaurant-navigation";
+import { CollectionStats, RestaurantRow } from "@/components/collection-browse";
+import { collectionStyles as s } from "@/styles/collections";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import { GroupMembershipConfirmation, type MembershipAction } from "@/components/group-membership-confirmation";
 import { useGroupAccess } from "@/hooks/use-group-access";
 import { groupErrorMessage, isGroupAccessDenied } from "@/lib/group-errors";
-import { visitSummary } from "@/lib/restaurant-ui";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/providers/auth";
 import { accountAccessToken } from "@/lib/account-session";
@@ -13,7 +14,7 @@ import type { GroupMember, GroupMembershipTarget, GroupRestaurantSummary, Pendin
 import * as Clipboard from "expo-clipboard";
 import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { AppState, Pressable, ScrollView, Text, View } from "react-native";
+import { AppState, Pressable, ScrollView, Text, View, useWindowDimensions } from "react-native";
 
 export default function GroupDetailScreen({ origin = "collection" }: { origin?: DetailOrigin }) {
     const router = useRouter();
@@ -34,7 +35,9 @@ export default function GroupDetailScreen({ origin = "collection" }: { origin?: 
 }
 
 function GroupDetails({ groupId, userId, origin }: { groupId: string; userId: string; origin: DetailOrigin }) {
+    const { fontScale } = useWindowDimensions();
     const router = useRouter();
+    const [showSettings, setShowSettings] = useState(false);
     const [members, setMembers] = useState<GroupMember[]>([]);
     const [targets, setTargets] = useState<GroupMembershipTarget[]>([]);
     const [restaurants, setRestaurants] = useState<GroupRestaurantSummary[]>([]);
@@ -282,102 +285,116 @@ function GroupDetails({ groupId, userId, origin }: { groupId: string; userId: st
     const hasActiveInvite = inviteExpires !== undefined && (inviteExpires === null || new Date(inviteExpires).getTime() > Date.now());
 
     return (
-        <ScreenScaffold edgeToEdge title={group?.name ?? "Group"} scrollRef={scroll} busy={busy} onBack={() => backToContext(router, origin === "home" ? "/" : "/groups")}>
+        <ScreenScaffold key={fontScale} edgeToEdge title={group && !loading && !loadError ? undefined : "Group"} scrollRef={scroll} busy={busy} onBack={() => backToContext(router, origin === "home" ? "/" : "/groups")}>
             {error !== "" && <Text style={styles.error}>{error}</Text>}
             {accessError !== "" && <Text style={styles.error}>{accessError}</Text>}
             {loadError !== "" && <Text style={styles.error}>{loadError}</Text>}
             {message !== "" && message !== "Invite code copied." && <Text style={styles.message}>{message}</Text>}
             {loading ? <Text style={styles.message}>Loading group...</Text> : !group ? (
-                <Text style={styles.message}>This group could not be found or you are no longer a member. Return to Groups or refresh.</Text>
+                <Text style={styles.message}>This group could not be found or you are no longer a member. Return to Collections or refresh.</Text>
             ) : loadError !== "" ? (
                 <Text style={styles.message}>Refresh to load current group details before taking an action.</Text>
             ) : (
                 <>
-                    <Text style={styles.message}>{isOwner ? "You are the Owner." : "You are a Member."}</Text>
+                    <Text style={s.eyebrow}>SHARED COLLECTION</Text>
+                    <Text accessibilityRole="header" style={[s.title, fontScale > 1.5 && s.largeTitle]}>{group.name}</Text>
+                    <View style={s.groupBanner}>
+                        <Ionicons name="people-outline" size={26} color="#9B5639" accessible={false} />
+                        <View style={s.body}><Text style={s.bannerTitle}>A table for your people</Text>
+                            <Text style={s.bannerCaption}>{members.length} {members.length === 1 ? "member" : "members"} · You are {isOwner ? "the Owner" : "a Member"}</Text></View>
+                    </View>
+                    <CollectionStats restaurants={restaurants.length} visits={restaurants.reduce((sum, restaurant) => sum + restaurant.total_visit_count, 0)} />
                     {confirmation && <GroupMembershipConfirmation action={confirmation} busy={busy} onConfirm={handleMembership} onCancel={() => setConfirmation(null)} />}
-                    <Text style={styles.label}>Saved restaurants</Text>
-                    {restaurants.length === 0 && <Text style={styles.message}>No restaurants yet. Tap the Add tab at the bottom to save a visit.</Text>}
-                    {restaurants.map(restaurant => (
-                        <Pressable key={restaurant.id} accessibilityRole="button" disabled={blocked} onPress={() => router.push(destinationHref({ destination_kind: "group", group_id: groupId, entry_id: restaurant.id, visit_id: null, available: true }, origin), { withAnchor: true })} style={styles.card}>
-                            <View style={styles.cardBody}>
-                                <View style={styles.cardHeading}>
-                                    <Text style={[styles.cardTitle, styles.cardHeadingText]}>{restaurant.name}</Text>
-                                    <Ionicons name="chevron-forward" size={18} color="#79665E" accessible={false} importantForAccessibility="no" />
-                                </View>
-                                <Text style={[styles.message, styles.cardMessage]}>{restaurant.address}</Text>
-                                {restaurant.cuisine && <Text style={[styles.message, styles.cardMessage]}>{restaurant.cuisine}</Text>}
-                                <Text style={[styles.message, styles.cardMessage]}>{visitSummary(restaurant)}</Text>
-                            </View>
+                    <View style={s.section}>
+                        <Text accessibilityRole="header" style={s.sectionTitle}>Saved restaurants</Text>
+                        <Pressable accessibilityRole="button" accessibilityLabel="Refresh Group" disabled={blocked}
+                            onPress={() => { setError(""); setMessage(""); refreshDetails(); }} style={[s.refresh, blocked && styles.disabled]}>
+                            <Ionicons name="refresh-outline" size={20} color="#C9472C" accessible={false} />
                         </Pressable>
-                    ))}
-                    <Text style={styles.label}>Current members</Text>
-                    {members.map(member => {
-                        const target = targets.find(item => item.user_id === member.user_id);
-                        return (
-                            <View key={member.user_id} style={styles.card}>
-                                <Text style={styles.cardTitle}>{member.display_name}</Text>
-                                <Text style={styles.message}>{member.is_owner ? "Owner" : "Member"}</Text>
-                                {isOwner && !member.is_owner && target && (
-                                    <>
-                                        <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${member.display_name} from group`} disabled={blocked} onPress={() => requestConfirmation({ kind: "remove", groupName: group.name, target })} style={[styles.secondaryButton, blocked && styles.disabled]}>
-                                            <Text style={styles.secondaryText}>Remove Member</Text>
+                    </View>
+                    {restaurants.length === 0 && <Text style={s.empty}>Your next meal belongs here. Use Add to share a visit with this group.</Text>}
+                    {restaurants.length > 0 && <View style={s.surface}>{restaurants.map((restaurant, index) => (
+                        <RestaurantRow key={restaurant.id} first={index === 0} restaurant={restaurant} disabled={blocked}
+                            onPress={() => router.push(destinationHref({ destination_kind: "group", group_id: groupId, entry_id: restaurant.id, visit_id: null, available: true }, origin), { withAnchor: true })} />
+                    ))}</View>}
+                    <View style={s.settings}>
+                        <Pressable accessibilityRole="button" accessibilityLabel="People & settings" accessibilityState={{ expanded: showSettings }}
+                            disabled={busy} onPress={() => setShowSettings(value => !value)} style={s.settingsToggle}>
+                            <Ionicons name="people-outline" size={20} color="#79665E" accessible={false} />
+                            <View style={s.body}><Text style={s.name}>People & settings</Text><Text style={s.address}>{requests.length ? `${requests.length} pending ${requests.length === 1 ? "request" : "requests"} · ` : ""}{isOwner ? "Members, invites & ownership" : "Members & membership"}</Text></View>
+                            <Ionicons name={showSettings ? "chevron-up" : "chevron-down"} size={18} color="#79665E" accessible={false} />
+                        </Pressable>
+                    </View>
+                    {showSettings && <>
+                        <Text style={styles.label}>Current members</Text>
+                        {members.map(member => {
+                            const target = targets.find(item => item.user_id === member.user_id);
+                            return (
+                                <View key={member.user_id} style={[s.rule, { paddingVertical: 16 }]}>
+                                    <Text style={s.name}>{member.display_name}</Text>
+                                    <Text style={styles.message}>{member.is_owner ? "Owner" : "Member"}</Text>
+                                    {isOwner && !member.is_owner && target && (
+                                        <>
+                                            <Pressable accessibilityRole="button" accessibilityLabel={`Remove ${member.display_name} from group`} disabled={blocked} onPress={() => requestConfirmation({ kind: "remove", groupName: group.name, target })} style={[styles.secondaryButton, blocked && styles.disabled]}>
+                                                <Text style={styles.secondaryText}>Remove Member</Text>
+                                            </Pressable>
+                                            <Pressable accessibilityRole="button" accessibilityLabel={`Transfer ownership to ${member.display_name}`} disabled={blocked} onPress={() => requestConfirmation({ kind: "transfer", groupName: group.name, target })} style={[styles.secondaryButton, blocked && styles.disabled]}>
+                                                <Text style={styles.secondaryText}>Transfer Ownership</Text>
+                                            </Pressable>
+                                        </>
+                                    )}
+                                </View>
+                            );
+                        })}
+                        <Text style={styles.label}>Membership</Text>
+                        {isOwner && <Text style={styles.message}>{members.length === 1 ? "You are the sole Owner. Approve another Member before transferring ownership and leaving." : "Transfer ownership to another current Member before leaving. You will stay a Member after the transfer."}</Text>}
+                        <Pressable accessibilityRole="button" disabled={isOwner || blocked} onPress={() => access && requestConfirmation({ kind: "leave", groupName: group.name, membershipId: access.membershipId })} style={[styles.secondaryButton, (isOwner || blocked) && styles.disabled]}>
+                            <Text style={styles.secondaryText}>Leave Group</Text>
+                        </Pressable>
+                        {isOwner && (
+                            <>
+                                <Text style={styles.label}>Invite code</Text>
+                                <Text style={styles.message}>
+                                    {hasActiveInvite ? "An invite is active. Resetting it invalidates the previous code." : "No active invite. Generate a code to invite someone."}
+                                </Text>
+                                <Pressable accessibilityRole="button" disabled={blocked} onPress={() => handleInvite("generate")} style={[styles.primaryButton, blocked && styles.disabled]}>
+                                    <Text style={styles.primaryText}>Generate / Reset Invite Code</Text>
+                                </Pressable>
+                                {rawCode !== "" && (
+                                    <View style={styles.card}>
+                                        <Text selectable style={styles.cardTitle}>{rawCode}</Text>
+                                        <Pressable accessibilityRole="button" disabled={blocked} onPress={handleCopyInvite} style={[styles.secondaryButton, blocked && styles.disabled]}>
+                                            <Text style={styles.secondaryText}>Copy Invite Code</Text>
                                         </Pressable>
-                                        <Pressable accessibilityRole="button" accessibilityLabel={`Transfer ownership to ${member.display_name}`} disabled={blocked} onPress={() => requestConfirmation({ kind: "transfer", groupName: group.name, target })} style={[styles.secondaryButton, blocked && styles.disabled]}>
-                                            <Text style={styles.secondaryText}>Transfer Ownership</Text>
-                                        </Pressable>
-                                    </>
+                                        {message === "Invite code copied." && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}
+                                        <Text style={styles.message}>Select and copy this code. It expires after 7 days. It cannot be retrieved after leaving this screen.</Text>
+                                    </View>
                                 )}
-                            </View>
-                        );
-                    })}
-                    <Text style={styles.label}>Membership</Text>
-                    {isOwner && <Text style={styles.message}>{members.length === 1 ? "You are the sole Owner. Approve another Member before transferring ownership and leaving." : "Transfer ownership to another current Member before leaving. You will stay a Member after the transfer."}</Text>}
-                    <Pressable accessibilityRole="button" disabled={isOwner || blocked} onPress={() => access && requestConfirmation({ kind: "leave", groupName: group.name, membershipId: access.membershipId })} style={[styles.secondaryButton, (isOwner || blocked) && styles.disabled]}>
-                        <Text style={styles.secondaryText}>Leave Group</Text>
-                    </Pressable>
-                    {isOwner && (
-                        <>
-                            <Text style={styles.label}>Invite code</Text>
-                            <Text style={styles.message}>
-                                {hasActiveInvite ? "An invite is active. Resetting it invalidates the previous code." : "No active invite. Generate a code to invite someone."}
-                            </Text>
-                            <Pressable accessibilityRole="button" disabled={blocked} onPress={() => handleInvite("generate")} style={[styles.primaryButton, blocked && styles.disabled]}>
-                                <Text style={styles.primaryText}>Generate / Reset Invite Code</Text>
-                            </Pressable>
-                            {rawCode !== "" && (
-                                <View style={styles.card}>
-                                    <Text selectable style={styles.cardTitle}>{rawCode}</Text>
-                                    <Pressable accessibilityRole="button" disabled={blocked} onPress={handleCopyInvite} style={[styles.secondaryButton, blocked && styles.disabled]}>
-                                        <Text style={styles.secondaryText}>Copy Invite Code</Text>
-                                    </Pressable>
-                                    {message === "Invite code copied." && <Text accessibilityLiveRegion="polite" style={styles.message}>{message}</Text>}
-                                    <Text style={styles.message}>Select and copy this code. It expires after 7 days. It cannot be retrieved after leaving this screen.</Text>
-                                </View>
-                            )}
-                            <Pressable accessibilityRole="button" disabled={blocked || !hasActiveInvite} onPress={() => handleInvite("revoke")} style={[styles.secondaryButton, (blocked || !hasActiveInvite) && styles.disabled]}>
-                                <Text style={styles.secondaryText}>Revoke Invite</Text>
-                            </Pressable>
-                            <Text style={styles.label}>Pending join requests</Text>
-                            {requests.length === 0 && <Text style={styles.message}>No pending requests.</Text>}
-                            {requests.map(request => (
-                                <View key={request.id} style={styles.card}>
-                                    <Text style={styles.cardTitle}>{request.display_name}</Text>
-                                    <Text style={styles.message}>Requested {new Date(request.requested_at).toLocaleDateString()}</Text>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Approve ${request.display_name}`} disabled={blocked} onPress={() => handleDecision(request.id, "approved")} style={styles.primaryButton}>
-                                        <Text style={styles.primaryText}>Approve</Text>
-                                    </Pressable>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Deny ${request.display_name}`} disabled={blocked} onPress={() => handleDecision(request.id, "denied")} style={styles.secondaryButton}>
-                                        <Text style={styles.secondaryText}>Deny</Text>
-                                    </Pressable>
-                                </View>
-                            ))}
-                        </>
-                    )}
+                                <Pressable accessibilityRole="button" disabled={blocked || !hasActiveInvite} onPress={() => handleInvite("revoke")} style={[styles.secondaryButton, (blocked || !hasActiveInvite) && styles.disabled]}>
+                                    <Text style={styles.secondaryText}>Revoke Invite</Text>
+                                </Pressable>
+                                <Text style={styles.label}>Pending join requests</Text>
+                                {requests.length === 0 && <Text style={styles.message}>No pending requests.</Text>}
+                                {requests.map(request => (
+                                    <View key={request.id} style={styles.card}>
+                                        <Text style={styles.cardTitle}>{request.display_name}</Text>
+                                        <Text style={styles.message}>Requested {new Date(request.requested_at).toLocaleDateString()}</Text>
+                                        <Pressable accessibilityRole="button" accessibilityLabel={`Approve ${request.display_name}`} disabled={blocked} onPress={() => handleDecision(request.id, "approved")} style={styles.primaryButton}>
+                                            <Text style={styles.primaryText}>Approve</Text>
+                                        </Pressable>
+                                        <Pressable accessibilityRole="button" accessibilityLabel={`Deny ${request.display_name}`} disabled={blocked} onPress={() => handleDecision(request.id, "denied")} style={styles.secondaryButton}>
+                                            <Text style={styles.secondaryText}>Deny</Text>
+                                        </Pressable>
+                                    </View>
+                                ))}
+                            </>
+                        )}
+                    </>}
                 </>
             )}
-            <Pressable accessibilityRole="button" disabled={busy || loading} onPress={() => { setError(""); setMessage(""); refreshDetails(); }} style={styles.secondaryButton}>
+            {(loading || !group || !!loadError) && <Pressable accessibilityRole="button" disabled={busy || loading} onPress={() => { setError(""); setMessage(""); refreshDetails(); }} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>Refresh Group</Text>
-            </Pressable>
+            </Pressable>}
         </ScreenScaffold>
     );
 }

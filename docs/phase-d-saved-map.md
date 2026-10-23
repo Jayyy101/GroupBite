@@ -1,5 +1,8 @@
 # Phase D — Polished Saved Map V1
 
+Phase F supersedes the original tab placement and region-only camera restoration
+below; see [current navigation and browsing review](phase-f-collections-redesign.md).
+
 Phase D adds the dedicated Saved Map to the structured-address baseline `f99c715`.
 It preserves the existing five tabs, Add/save/recovery contracts and permissions.
 There are no schema, Storage, hosted-data or dependency changes. The existing

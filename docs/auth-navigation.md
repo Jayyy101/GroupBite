@@ -15,14 +15,17 @@ Token refresh for the same account does not reset navigation.
 
 `(app)` and `(tabs)` are URL-free route groups. Existing paths such as
 `/my-places`, `/add-visit`, `/group/:id`, and `/personal-place/:id` still work.
-Home, My Places, Add, Groups and Account remain the same styled JavaScript
-Expo Router tabs. Each tab contains a native Stack, including Home browsing:
+Home, Map, Add, Collections and Account are the styled JavaScript
+Expo Router tabs. Collections retains `/groups` as its compatible root URL;
+My Places is a private collection within that stack, never a database group.
+Each tab contains a native Stack, including Home browsing:
 
 ```text
 (app)/
   (tabs)/
     (home)/_layout.tsx                 initialRouteName: index
       index.tsx                      Dashboard
+      home/my-places.tsx               private collection, Home Back context
       home/personal-place/[id].tsx
       home/group/[id].tsx
       home/group/[id]/restaurant/[entryId].tsx
@@ -31,11 +34,14 @@ Expo Router tabs. Each tab contains a native Stack, including Home browsing:
       index.tsx                       landing, Saved and previous recovery
       personal-place/[id].tsx          result-origin personal detail
       group/[id]/restaurant/[entryId].tsx  result-origin group detail
-    (my-places)/_layout.tsx            initialRouteName: my-places
-      my-places.tsx
-      personal-place/[id].tsx
+    (map)/_layout.tsx                  initialRouteName: saved-map
+      saved-map.tsx                    Map tab root; All Saved initially
+      map/personal-place/[id].tsx
+      map/group/[id]/restaurant/[entryId].tsx
     (groups)/_layout.tsx               initialRouteName: groups
-      groups.tsx
+      groups.tsx                       Collections landing
+      my-places.tsx                    private collection
+      personal-place/[id].tsx
       group/[id].tsx
       group/[id]/restaurant/[entryId].tsx
     (account)/_layout.tsx              initialRouteName: account

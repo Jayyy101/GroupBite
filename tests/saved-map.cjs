@@ -269,7 +269,7 @@ const source = (overrides = {}) => ({ key: 'personal:one', kind: 'personal', ent
         await r.settle(); assert(textOf(r.output).includes('No saved restaurants')); r.unmount();
         for (const options of [{ platform: 'ios', development: false }, { platform: 'android', development: true }]) {
             const rt = runtime({ ...options, mocks: { '@/components/saved-map-screen': { default: 'SavedMapScreen' } } }), screen = rt.render(rt.load('app/saved-map').default, false); await screen.settle();
-            assert(nodes(screen.output).some(n => n.type === 'Redirect' && n.props.href === '/my-places')); assert.equal(rt.world.requests.length, 0); screen.unmount();
+            assert(textOf(screen.output).includes('Saved Map is currently available in the iOS development build.')); assert(!nodes(screen.output).some(n=>n.type==='SavedMapScreen')); assert.equal(rt.world.requests.length, 0); screen.unmount();
         }
     });
     await test('Denied location is opt-in, graceful and never changes saved framing or data', async () => {
@@ -302,6 +302,29 @@ const source = (overrides = {}) => ({ key: 'personal:one', kind: 'personal', ent
         const rows = m.groupMapRestaurants([source(), source({ key: 'group:two', coordinate: { latitude: 37.00001, longitude: -122, quality: 'verified' } })]);
         assert.equal(rows[0].coordinate.latitude, 37.00001);
         assert.equal(m.groupMapRestaurants([source({ appleId: null }), source({ key: 'two', appleId: null, name: 'Another business' })]).length, 2);
+    });
+    await test('Detail opening captures the full native camera and restores it after read revalidation', async () => {
+        const camera={center:{latitude:37.5,longitude:-122},altitude:1700,heading:43,pitch:30};
+        const capture=deferred(),f=model({mocks:{'@/components/saved-map-canvas':{default:props=>{props.ref.current={captureCamera:()=>capture.promise,focus(){},fit(){}};return {type:'MapCanvas',props};}}}});
+        const Screen=f.rt.load('@/components/saved-map-screen').default,r=f.rt.render(()=>({type:Screen,props:{userId:'a',tabRoot:true}}),false);await r.settle();
+        assert(!nodes(r.output).some(n=>n.props?.accessibilityLabel==='Back'));
+        let canvas=nodes(r.output).find(n=>n.type==='MapCanvas');canvas.props.onSelect(canvas.props.restaurants[0].key);await r.settle();
+        const link=nodes(r.output).find(n=>n.type==='Pressable'&&n.props.accessibilityLabel?.startsWith('Open '));
+        link.props.onPress();link.props.onPress();await r.settle();assert.equal(f.rt.world.navigation.length,0);
+        capture.resolve(camera);await r.settle();assert.equal(f.rt.world.navigation.length,1);
+        f.rt.world.focused=false;r.dirty=true;await r.settle();f.rt.world.focused=true;r.dirty=true;await r.settle();
+        canvas=nodes(r.output).find(n=>n.type==='MapCanvas');assert.deepEqual(plain(canvas.props.initialCamera),camera);r.unmount();
+        const rt=runtime({platform:'ios'}),react=rt.load('react');react.forwardRef=render=>props=>render(props,{current:null});react.useImperativeHandle=()=>{};
+        const Native=rt.load('@/components/saved-map-canvas').default, native=rt.render(()=>({type:Native,props:{restaurants:[],selected:null,initialRegion:null,initialCamera:camera,padding:{top:100,bottom:270,left:34,right:60},showUser:false,onSelect(){},onDismiss(){},onRegion(){}}}),false);await native.settle();
+        const map=nodes(native.output).find(n=>n.type==='MapView');assert.deepEqual(plain(map.props.initialCamera),camera);assert.equal(map.props.initialRegion,undefined);native.unmount();
+    });
+    await test('A camera read resolving after blur cannot open a private detail', async () => {
+        const capture=deferred(),f=model({mocks:{'@/components/saved-map-canvas':{default:props=>{props.ref.current={captureCamera:()=>capture.promise,focus(){},fit(){}};return {type:'MapCanvas',props};}}}});
+        const Screen=f.rt.load('@/components/saved-map-screen').default,r=f.rt.render(()=>({type:Screen,props:{userId:'a'}}),false);await r.settle();
+        const canvas=nodes(r.output).find(n=>n.type==='MapCanvas');canvas.props.onSelect(canvas.props.restaurants[0].key);await r.settle();
+        nodes(r.output).find(n=>n.type==='Pressable'&&n.props.accessibilityLabel?.startsWith('Open ')).props.onPress();
+        f.rt.world.focused=false;r.dirty=true;await r.settle();capture.resolve({center:{latitude:37,longitude:-122},heading:20,pitch:30,altitude:1000});await r.settle();
+        assert.equal(f.rt.world.navigation.length,0);assert(!nodes(r.output).some(n=>n.type==='MapCanvas'));r.unmount();
     });
     await test('Map-origin detail Back and edit return paths preserve collection IDs', async () => {
         const f = model(), nav = f.rt.load('@/lib/restaurant-navigation'), auth = f.rt.load('@/lib/auth-navigation');
