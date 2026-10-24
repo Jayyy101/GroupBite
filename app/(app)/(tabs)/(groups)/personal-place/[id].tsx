@@ -1,5 +1,6 @@
 import { backToContext, detailFallback, detailOriginParams, type DetailOrigin } from "@/lib/restaurant-navigation";
 import { PersonalAccess } from "@/components/personal-access";
+import { VisitPhotoSection } from "@/components/visit-photos";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import PersonalApplePlaceLookup from "@/components/personal-apple-place-lookup";
 import DevPersonalLocationRepair from "@/components/dev-personal-location-repair";
@@ -82,6 +83,8 @@ function PersonalPlaceDetails({ userId, id, origin }: { userId: string; id?: str
                     {visit.rating !== null && <Text style={styles.message}>Rating: {visit.rating}/5</Text>}
                     {visit.would_go_again !== null && <Text style={styles.message}>Would go again: {visit.would_go_again ? "Yes" : "No"}</Text>}
                     {visit.notes !== null && <Text style={styles.message}>{visit.notes}</Text>}
+                    <VisitPhotoSection userId={userId} target={{ kind: "personal", entryId: place.id, visitId: visit.id }} canManage
+                        disabled={busy || confirming || repairLocked} onBusyChange={value => { if (mounted.current) setBusy(value); }} />
                     {(["edit","delete"] as const).map(action => <Pressable key={action} accessibilityRole="button" disabled={busy || confirming || repairLocked}
                         accessibilityLabel={`${action === "edit" ? "Edit" : "Delete"} personal visit ${visit.visited_on ?? "without date"}`}
                         style={styles.secondaryButton} onPress={() => { if (mounted.current && !submitting.current) router.push({ pathname: "/personal-visit-form", params: { id: place.id, visitId: visit.id, action, ...detailOriginParams(origin) } }); }}>

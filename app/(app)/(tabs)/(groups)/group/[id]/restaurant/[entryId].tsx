@@ -2,6 +2,7 @@ import { backToContext, detailFallback, detailOriginParams, type DetailOrigin } 
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import GroupApplePlaceLookup from "@/components/group-apple-place-lookup";
 import { useVisitManagement } from "@/components/visit-management";
+import { VisitPhotoSection } from "@/components/visit-photos";
 import { useGroupAccess } from "@/hooks/use-group-access";
 import { isGroupAccessDenied } from "@/lib/group-errors";
 import { isUuid, visitSummary } from "@/lib/restaurant-ui";
@@ -38,6 +39,8 @@ function RestaurantDetails({ groupId, entryId, userId, origin }: { groupId: stri
     const [refreshVersion, setRefreshVersion] = useState(0);
     const [management, setManagement] = useState<{ visit: GroupVisit; action: "edit" | "delete"; accessKey: string; identity: number } | null>(null);
     const nextEditor = useRef(0);
+    const mounted = useRef(true);
+    useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
     const [busy, setBusy] = useState(false);
     const [message, setMessage] = useState("");
     const { access, loading: accessLoading, error: accessError, revoked } = useGroupAccess(groupId, userId, refreshVersion);
@@ -129,7 +132,7 @@ function RestaurantDetails({ groupId, entryId, userId, origin }: { groupId: stri
                     <Text style={styles.message}>{visibleRestaurant.address}</Text>
                     {visibleRestaurant.cuisine && <Text style={styles.message}>{visibleRestaurant.cuisine}</Text>}
                     <Text style={styles.message}>{visitSummary(visibleRestaurant)}</Text>
-                    <Pressable accessibilityRole="button" disabled={management !== null} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id, ...detailOriginParams(origin) } })} style={[styles.primaryButton, management !== null && styles.disabled]}>
+                    <Pressable accessibilityRole="button" disabled={management !== null || busy} onPress={() => router.push({ pathname: "/add-visit", params: { groupId, restaurantId: visibleRestaurant.restaurant_id, ...detailOriginParams(origin) } })} style={[styles.primaryButton, (management !== null || busy) && styles.disabled]}>
                         <Text style={styles.primaryText}>Add Another Visit</Text>
                     </Pressable>
                     {__DEV__ && <GroupApplePlaceLookup key={`${userId}:${groupId}:${entryId}:${accessKey}`}
@@ -144,6 +147,9 @@ function RestaurantDetails({ groupId, entryId, userId, origin }: { groupId: stri
                                 {visit.rating !== null && <Text style={[styles.message, styles.cardMessage]}>Rating: {visit.rating}/5</Text>}
                                 {visit.would_go_again !== null && <Text style={[styles.message, styles.cardMessage]}>Would go again: {visit.would_go_again ? "Yes" : "No"}</Text>}
                                 {visit.notes && <Text style={[styles.message, styles.cardMessage]}>{visit.notes}</Text>}
+                                <VisitPhotoSection key={`${visit.id}:${accessKey}`} userId={userId}
+                                    target={{ kind: "group", groupId, entryId, visitId: visit.id, membershipId: access!.membershipId }}
+                                    canManage={visit.can_manage} disabled={management !== null || busy} onBusyChange={value => { if (mounted.current) setBusy(value); }} />
                             </View>
                             {management?.visit.id === visit.id ? (
                                 <View style={styles.cardActions}>
@@ -151,10 +157,10 @@ function RestaurantDetails({ groupId, entryId, userId, origin }: { groupId: stri
                                 </View>
                             ) : visit.can_manage && (
                                 <View style={styles.cardActions}>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visit, action: "edit", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, management !== null && styles.disabled]}>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Edit visit by ${visit.creator_display_name}`} disabled={management !== null || busy} onPress={() => { setMessage(""); setManagement({ visit, action: "edit", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, (management !== null || busy) && styles.disabled]}>
                                         <Text style={styles.secondaryText}>Edit Visit</Text>
                                     </Pressable>
-                                    <Pressable accessibilityRole="button" accessibilityLabel={`Delete visit by ${visit.creator_display_name}`} disabled={management !== null} onPress={() => { setMessage(""); setManagement({ visit, action: "delete", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, management !== null && styles.disabled]}>
+                                    <Pressable accessibilityRole="button" accessibilityLabel={`Delete visit by ${visit.creator_display_name}`} disabled={management !== null || busy} onPress={() => { setMessage(""); setManagement({ visit, action: "delete", accessKey, identity: ++nextEditor.current }); }} style={[styles.secondaryButton, styles.cardAction, (management !== null || busy) && styles.disabled]}>
                                         <Text style={styles.secondaryText}>Delete Visit</Text>
                                     </Pressable>
                                 </View>

@@ -1,4 +1,6 @@
 import { AddResults, PreviousAddResults } from "@/components/add-results";
+import { PhotoRecovery } from "@/components/visit-photos";
+import { usePhotoJobs } from "@/providers/visit-photos";
 import { PersonalAccess } from "@/components/personal-access";
 import { RestaurantSearch } from "@/components/restaurant-search";
 import { ScreenScaffold } from "@/components/screen-scaffold";
@@ -27,6 +29,7 @@ export default function AddScreen() {
 }
 function AddLanding({ userId }: { userId: string }) {
     const router = useRouter(), { coordinator, state } = useUnifiedAdd();
+    const photoJobs = usePhotoJobs();
     const { session, loading: authLoading } = useAuth();
     const focused = useIsFocused(), { isActive, version } = useForegroundRefresh();
     const alive = useRef(false), active = useRef(false);
@@ -40,7 +43,7 @@ function AddLanding({ userId }: { userId: string }) {
     const groupRecovery = state.attempts.some(attempt => attempt.destination.kind === "group")
         || state.previous.some(previous => previous.attempts.some(attempt => attempt.destination.kind === "group"));
     const unresolved = !!state.error || state.attempts.some(a => a.status !== "saved");
-    const leave = useLeaveGuard({ userId, dirty: false, busy: state.busy, uncertain: unresolved,
+    const leave = useLeaveGuard({ userId, dirty: false, busy: state.busy || !!photoJobs?.busy, uncertain: unresolved,
         uncertainExitMessage: "Some destinations may already have saved. Finishing does not undo them. Review every destination before starting a separate save. Leaving this screen keeps recovery available in Add." });
     useEffect(() => {
         traceSearch("landing:state", { focused, active: isActive, ready: state.ready, busy: state.busy, attempts: state.attempts.length, error: !!state.error });
@@ -79,13 +82,14 @@ function AddLanding({ userId }: { userId: string }) {
         return () => { valid = false; };
     }, [userId, focused, isActive, version, state.attempts.length, state.previous.length, groupRecovery, coordinator]);
     function choose(restaurant: AddRestaurant | null) {
-        if (!canOperate() || choosing.current || !coordinator.state.ready || coordinator.state.busy || coordinator.state.attempts.length || coordinator.state.error) return;
+        if (!canOperate() || choosing.current || photoJobs?.busy || !coordinator.state.ready || coordinator.state.busy || coordinator.state.attempts.length || coordinator.state.error) return;
         choosing.current = true;
         coordinator.selectRestaurant(restaurant); router.push("/add-visit");
     }
     return <PersonalAccess title="Add">{() => <ScreenScaffold keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets
         onTouchStart={() => dismissSuggestions.current?.()}>
         {leave.confirmation}
+        <PhotoRecovery canOperate={canOperate} />
         {!state.ready ? <Text style={styles.message}>Checking save recovery...</Text> : state.attempts.length || state.error ? <AddResults canOperate={canOperate}
             separate={async (expected, temporary) => {
                 const result = await coordinator.startSeparate(expected, canOperate, temporary);

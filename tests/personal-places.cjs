@@ -129,6 +129,7 @@ function runtime(options = {}) {
         ? options.navigationDispatch(action) : world.navigation.push(action) };
     const mocks = {
         '@expo/vector-icons/Ionicons': { default: 'Icon' },
+        '@react-native-community/datetimepicker': { default: 'DateTimePicker' },
         react, 'react/jsx-runtime': { jsx, jsxs: jsx, Fragment: 'Fragment' },
         'react-native': { KeyboardAvoidingView: 'KeyboardAvoidingView', AppState: appState, Appearance: { setColorScheme() {} }, Modal: 'Modal', ActivityIndicator: 'ActivityIndicator',
             useWindowDimensions: () => world.windowDimensions,
@@ -156,6 +157,13 @@ function runtime(options = {}) {
             async setItem(key, value) { if(key !== 'savedPlaces') { world.journal.set(key,value);return; } world.localWrites++; world.local = value; },
             async removeItem(key) { assert.notEqual(key,'savedPlaces');world.journal.delete(key); } } },
         expo: { requireOptionalNativeModule: () => null },
+        // Dedicated photo suites exercise native selection and recovery. Legacy
+        // visit/navigation fixtures keep photos unavailable without a deployment.
+        'expo-crypto': { randomUUID: () => '77777777-7777-4777-8777-777777777777' },
+        'expo-file-system': { File: class {}, Directory: class {}, Paths: {} },
+        'expo-image-manipulator': {},
+        'expo-image-picker': {},
+        'expo-image': { Image: 'Image' },
         'expo-status-bar': { StatusBar: 'StatusBar' },
         'react-native-maps': { default: 'MapView', Marker: 'Marker', PROVIDER_DEFAULT: 'default' },
         ...options.mocks,

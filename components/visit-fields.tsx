@@ -1,4 +1,5 @@
 import { backendStyles as styles } from "@/styles/backend";
+import { VisitDateField } from "@/components/visit-date-field";
 import type { PersonalPlaceFields } from "@/types/database";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 
@@ -7,9 +8,7 @@ export function VisitFields({ value, onChange, disabled, notesLabel = "Private n
     value: VisitFieldsValue; onChange: (value: VisitFieldsValue) => void; disabled: boolean; notesLabel?: string;
 }) {
     return <View>
-        <Text style={styles.label}>Visit date (optional)</Text>
-        <TextInput accessibilityLabel="Visit date" style={styles.input} value={value.visited_on ?? ""} editable={!disabled}
-            maxLength={10} autoCorrect={false} placeholder="YYYY-MM-DD" onChangeText={text => onChange({ ...value, visited_on: text || null })} />
+        <VisitDateField value={value.visited_on} disabled={disabled} onChange={visited_on => onChange({ ...value, visited_on })} />
         <Text style={styles.label}>Rating (optional, 1–5)</Text>
         <View style={formStyles.row}>
             {[1, 2, 3, 4, 5].map(rating => <Pressable key={rating} accessibilityRole="button" accessibilityLabel={`Rating ${rating} out of 5`}

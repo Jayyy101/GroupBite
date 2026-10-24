@@ -10,8 +10,10 @@ import { spawn } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const args = process.argv.slice(2);
-const visitEvents = args.at(-1) === '--visit-events';
-if (visitEvents) args.pop();
+const visitPhotos = args.at(-1) === '--visit-photos';
+if (visitPhotos) args.pop();
+const visitEvents = visitPhotos || args.at(-1) === '--visit-events';
+if (args.at(-1) === '--visit-events') args.pop();
 const structuredMapkit = visitEvents || args.at(-1) === '--structured-mapkit';
 if (args.at(-1) === '--structured-mapkit') args.pop();
 const mapkitLocations = structuredMapkit || args.at(-1) === '--mapkit-locations';
@@ -273,6 +275,32 @@ async function main() {
         await admin.query("select set_config('groupbite.local_validation','m18-unified-add',false)");
         await admin.query(await source('tests/unified_add.sql'));
         console.log('PASS post-migration-19 legacy saves and recovery remain compatible');
+    }
+    if (visitPhotos) {
+        // Models Storage's SQL authorization boundary only; the Storage HTTP
+        // service, byte transfer and MIME sniffing require separate acceptance.
+        await admin.query(`create schema storage;
+            create table storage.buckets(id text primary key,name text,public boolean,file_size_limit bigint,allowed_mime_types text[]);
+            create table storage.objects(id uuid primary key default gen_random_uuid(),bucket_id text references storage.buckets(id),name text,metadata jsonb,unique(bucket_id,name));
+            alter table storage.objects enable row level security;
+            grant usage on schema storage to authenticated;
+            grant select,insert,update,delete on storage.objects to authenticated;`);
+        const tables=(await admin.query("select tablename from pg_tables where schemaname='public' order by tablename")).rows.map(r=>r.tablename);
+        const rows=async()=>Object.fromEntries(await Promise.all(tables.map(async t=>[t,(await admin.query(`select to_jsonb(t) row from public.${t} t order by to_jsonb(t)::text`)).rows])));
+        const before=await rows();
+        const functions=(await admin.query("select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where pronamespace='public'::regnamespace and prokind='f' order by oid")).rows;
+        await admin.query(await source('migrations/20261022002000_visit_photos.sql'));
+        assert.deepEqual(await rows(),before);
+        assert.deepEqual((await admin.query('select oid,pg_get_functiondef(oid) definition,proacl::text from pg_proc where oid=any($1::oid[]) order by oid',[functions.map(f=>f.oid)])).rows,functions);
+        assert.equal((await admin.query('select count(*)::int n from public.visit_photos')).rows[0].n,0);
+        console.log('PASS migration 20 preserves all existing rows and RPCs; no photo backfill');
+        await admin.query("select set_config('groupbite.local_validation','visit-photos',false)");
+        await admin.query(await source('tests/visit_photos.sql'));
+        assert.deepEqual(await rows(),before);
+        console.log('PASS photo SQL/RLS contracts and fixture rollback');
+        await source('tests/visit_photos_concurrency.mjs');
+        const {runVisitPhotoConcurrency}=await import('./visit_photos_concurrency.mjs');
+        await runVisitPhotoConcurrency({admin,a,b,owner,other,member});
     }
     for (const [file, hash] of hashes) assert.equal(crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'), hash);
     console.log('PASS all migration/test input hashes unchanged during validation');

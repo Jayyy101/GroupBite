@@ -1,4 +1,8 @@
 import { AddResults } from "@/components/add-results";
+import { PhotoSelection, PhotoRecovery } from "@/components/visit-photos";
+import { usePhotoJobs } from "@/providers/visit-photos";
+import { localToday } from "@/lib/visit-date";
+import type { SelectedPhoto } from "@/types/visit-photos";
 import { PersonalAccess } from "@/components/personal-access";
 import { ScreenScaffold } from "@/components/screen-scaffold";
 import Ionicons from "@expo/vector-icons/Ionicons";
@@ -20,11 +24,9 @@ import type { AddRestaurant, Group } from "@/types/database";
 import { useIsFocused } from "@react-navigation/native";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
-import { AppState, Pressable, Text, TextInput } from "react-native";
+import { AppState, Pressable, Text, TextInput, View } from "react-native";
 
-export function localToday(now = new Date()) {
-    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,"0")}-${String(now.getDate()).padStart(2,"0")}`;
-}
+export { localToday } from "@/lib/visit-date";
 export default function UnifiedAddFormScreen() {
     const { session } = useAuth();
     const params = useLocalSearchParams<{ groupId?: string; restaurantId?: string; personalId?: string; fromHome?: string; fromMap?: string; fromAdd?: string }>();
@@ -37,6 +39,11 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
     const [initial] = useState<AddFields>(() => ({ restaurant: state.restaurant ?? { name: "", address: "", cuisine: null },
         visited_on: localToday(), rating: null, would_go_again: null, privateNotes: "", groupNotes: "" }));
     const [fields, setFields] = useState(initial), [destinations, setDestinations] = useState<Destination[]>([]);
+    const photoJobs = usePhotoJobs();
+    const [photos, setPhotos] = useState<SelectedPhoto[]>([]), [sharedGroups, setSharedGroups] = useState<string[]>([]);
+    const [choosingPhotos, setChoosingPhotos] = useState(false);
+    const photoSelectionLock = useRef(false);
+    const photoBusy = choosingPhotos || !!photoJobs?.busy;
     const [groups, setGroups] = useState<(Group & { membershipId: string })[]>([]);
     const [verified, setVerified] = useState(false);
     const [loading, setLoading] = useState(true), [error, setError] = useState(""), [refresh, setRefresh] = useState(0);
@@ -45,8 +52,8 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
     visible.current = focused && isActive && !authLoading && session?.user.id === userId;
     const canOperate = () => alive.current && !abandoned.current && !departed.current && visible.current && AppState.currentState === "active";
     const canSave = () => canOperate() && verifiedEpoch.current === epoch.current;
-    const leave = useLeaveGuard({ userId, dirty: JSON.stringify(fields) !== JSON.stringify(baseline.current) || destinations.length > 0,
-        busy: state.busy, uncertain: state.attempts.some(a => a.status !== "saved") || !!state.error,
+    const leave = useLeaveGuard({ userId, dirty: JSON.stringify(fields) !== JSON.stringify(baseline.current) || destinations.length > 0 || photos.length > 0,
+        busy: state.busy || photoBusy, uncertain: state.attempts.some(a => a.status !== "saved") || !!state.error,
         uncertainExitMessage: "Some destinations may already have saved. Leaving does not undo them. Recovery remains available in Add. Review saved results before starting another visit.",
         onDiscard: () => { abandoned.current = true; if (!state.attempts.length) coordinator.selectRestaurant(null); } });
     useEffect(() => {
@@ -110,6 +117,9 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
                     return membership ? [{ ...group, membershipId: membership.membership_id }] : [];
                 });
                 setGroups(allowed);
+                // An admission change revokes the previous photo-sharing choice.
+                setSharedGroups(selected => selected.filter(groupId => destinations.some(d => d.kind === "group" && d.groupId === groupId
+                    && allowed.some(g => g.id === groupId && g.membershipId === d.membershipId))));
                 setDestinations(selected => selected.filter(d => d.kind === "personal" || allowed.some(group => group.id === d.groupId && group.membershipId === d.membershipId)));
                 if (source && !sourceLoaded.current) { const next = { ...initial, restaurant: source }; baseline.current = next; setFields(next); }
                 sourceLoaded.current = true; verifiedEpoch.current = readEpoch; setVerified(true); setError("");
@@ -121,10 +131,19 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [userId, focused, isActive, version, refresh, params.personalId, params.restaurantId, params.groupId]);
     async function save() {
-        if (!canSave() || loading || coordinator.state.busy || coordinator.state.attempts.length || !coordinator.state.ready || coordinator.state.error) return;
+        if (!canSave() || loading || photoSelectionLock.current || photoJobs?.busy || coordinator.state.busy || coordinator.state.attempts.length || !coordinator.state.ready || coordinator.state.error) return;
         const saveEpoch = epoch.current;
         try {
-            await coordinator.start(fields,destinations,() => canSave() && epoch.current === saveEpoch);
+            if (photos.length && !destinations.some(d => d.kind === "personal" || sharedGroups.includes(d.groupId!))) {
+                setError("Choose My Places or explicitly share photos with a selected group, or remove the selected photos."); return;
+            }
+            await coordinator.start(fields,destinations,() => canSave() && epoch.current === saveEpoch,
+                photos.length ? submissions => {
+                    if (!photoJobs) throw new Error("Photo recovery is unavailable.");
+                    return photoJobs.stageAdd(photos, submissions, sharedGroups);
+                } : undefined);
+            // Uses the authoritative receipt's visit ID, never a latest-history guess.
+            if (photos.length && canSave() && epoch.current === saveEpoch) await photoJobs?.run(() => canSave() && epoch.current === saveEpoch);
             if (!canOperate() || epoch.current !== saveEpoch) return;
             const results = coordinator.state.attempts;
             if (results.length === 1 && results[0].status === "saved" && results[0].result?.available) {
@@ -136,18 +155,19 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
     }
     const factsLocked = !!fields.restaurant.entry_id;
     function changeFact(key: "name" | "address" | "cuisine", value: string) {
-        if (!canOperate() || state.busy || state.attempts.length || factsLocked) return;
+        if (!canOperate() || photoSelectionLock.current || photoJobs?.busy || state.busy || state.attempts.length || factsLocked) return;
         setFields(f => ({ ...f, restaurant: { ...f.restaurant, [key]: value,
             ...(key === "cuisine" ? {} : { apple_place_id: null, mapkit_point: undefined }) } }));
     }
     function toggle(destination: Destination) {
-        if (!canSave() || loading || state.busy || state.attempts.length) return;
+        if (!canSave() || loading || photoSelectionLock.current || photoJobs?.busy || state.busy || state.attempts.length) return;
         setDestinations(all => all.some(d => d.kind === destination.kind && d.groupId === destination.groupId)
             ? all.filter(d => !(d.kind === destination.kind && d.groupId === destination.groupId)) : [...all,destination]);
+        if (destination.groupId) setSharedGroups(all => all.filter(id => id !== destination.groupId));
     }
     return <>{leave.confirmation}<PersonalAccess title="Add a visit">{() => <ScreenScaffold edgeToEdge includeBottomInset
-        keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets busy={state.busy}
-        onBack={() => { if (canOperate() && !coordinator.state.busy) leave.requestLeave(() => router.canGoBack() ? router.back() : router.replace("/add")); }}>
+        keyboardShouldPersistTaps="handled" keyboardDismissMode="on-drag" automaticallyAdjustKeyboardInsets busy={state.busy || photoBusy}
+        onBack={() => { if (canOperate() && !photoSelectionLock.current && !photoJobs?.busy && !coordinator.state.busy) leave.requestLeave(() => router.canGoBack() ? router.back() : router.replace("/add")); }}>
         {state.attempts.length || state.error ? <AddResults canOperate={canOperate}
             separate={async (expected, temporary) => {
                 const result = await coordinator.startSeparate(expected, canOperate, temporary);
@@ -198,11 +218,29 @@ function UnifiedAddForm({ userId, params }: { userId: string; params: { groupId?
             <TextInput accessibilityLabel="Group notes" value={fields.groupNotes} editable={!loading && !state.busy} maxLength={4000} multiline
                 style={[styles.input, { minHeight: 100 }]} onChangeText={groupNotes => { if (canSave() && !state.busy) setFields(f => ({ ...f,groupNotes })); }} />
             <Text style={styles.message}>Group notes are copied to each selected group. Date, rating, and would-go-again are copied to every destination.</Text>
+            <PhotoSelection userId={userId} photos={photos} onChange={setPhotos} disabled={loading || state.busy || photoBusy}
+                canOperate={canOperate} canRetain={() => alive.current && !abandoned.current && !departed.current}
+                onBusyChange={value => { photoSelectionLock.current = value; setChoosingPhotos(value); }} />
+            {!!photos.length && <View style={{ marginBottom: 20 }}>
+                <Text style={styles.label}>Where should these photos go?</Text>
+                <Text style={styles.message}>{destinations.some(d => d.kind === "personal") ? "My Places keeps a private copy. " : ""}Sharing with each group is your choice.</Text>
+                {destinations.filter(d => d.kind === "group").map(d => {
+                    const checked = sharedGroups.includes(d.groupId!);
+                    return <Pressable key={d.groupId} accessibilityRole="checkbox" accessibilityLabel={`Share photos with ${d.label}`} accessibilityState={{ checked }}
+                        disabled={state.busy || photoBusy} style={[styles.card, styles.destinationCard, checked && styles.destinationSelected]}
+                        onPress={() => { if (canSave()) setSharedGroups(all => checked ? all.filter(id => id !== d.groupId) : [...all, d.groupId!]); }}>
+                        <Text style={[styles.cardTitle, styles.cardHeadingText]}>Share photos with {d.label}</Text>
+                        <Ionicons name={checked ? "checkmark-circle" : "ellipse-outline"} size={28} color="#C9472C" />
+                    </Pressable>;
+                })}
+                <Text style={styles.message}>Each destination gets its own attachment. Removing a photo later affects only that visit.</Text>
+            </View>}
             {error !== "" && <Text accessibilityRole="alert" style={styles.error}>{error}</Text>}
-            <Pressable accessibilityRole="button" disabled={loading || state.busy || !state.ready || !destinations.length} onPress={save} style={styles.primaryButton}>
+            <Pressable accessibilityRole="button" disabled={loading || state.busy || photoBusy || !state.ready || !destinations.length} onPress={save} style={styles.primaryButton}>
                 <Text style={styles.primaryText}>Save Visit</Text></Pressable>
             <Pressable accessibilityRole="button" disabled={state.busy || loading} onPress={() => { if (canOperate() && !state.busy) setRefresh(v => v+1); }} style={styles.secondaryButton}>
                 <Text style={styles.secondaryText}>Refresh Destinations</Text></Pressable>
         </>}
+        <PhotoRecovery canOperate={canOperate} />
     </ScreenScaffold>}</PersonalAccess></>;
 }

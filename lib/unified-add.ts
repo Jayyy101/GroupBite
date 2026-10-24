@@ -262,7 +262,8 @@ export class AddCoordinator {
             }
         }
     }
-    async start(fields: AddFields, destinations: readonly Destination[], canSend: () => boolean) {
+    async start(fields: AddFields, destinations: readonly Destination[], canSend: () => boolean,
+        beforeSend?: (submissions: readonly Submission[]) => Promise<void>) {
         if (this.disposed || !this.state.ready || this.state.busy || this.state.attempts.length || this.state.error || !canSend()) return;
         const submissions = freezeAddSubmissions(this.userId, fields, destinations);
         this.update({ busy: true, attempts: submissions.map(submission => ({ requestId: submission.args.client_request_id,
@@ -282,6 +283,9 @@ export class AddCoordinator {
                 await AsyncStorage.setItem(key(this.userId), JSON.stringify(submissions.map(s => ({
                     requestId: s.args.client_request_id, eventId: s.eventId, kind: s.destination.kind, ...(s.destination.groupId ? { groupId: s.destination.groupId } : {}) }))));
             });
+            // Photo consent/local files are retained against these exact receipt
+            // identities before any visit write. Photos never enter visit payloads.
+            if (beforeSend) await beforeSend(submissions);
             this.pendingArchives = this.pendingArchives.filter(record => !retained.includes(record));
             this.update({ previous: this.state.previous.map(record => {
                 const saved = retained.find(saved => saved.id === record.id);

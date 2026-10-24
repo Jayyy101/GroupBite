@@ -2,6 +2,7 @@ import { LegacyArchiveProvider } from "@/providers/legacy-archive";
 import { GroupCreationProvider } from "@/providers/group-creation";
 import { JoinRequestProvider } from "@/providers/join-request";
 import { UnifiedAddProvider } from "@/providers/unified-add";
+import { VisitPhotosProvider } from "@/providers/visit-photos";
 import { authReturnTo } from "@/lib/auth-navigation";
 import { useAuth } from "@/providers/auth";
 import { backendStyles as styles } from "@/styles/backend";
@@ -31,9 +32,11 @@ export default function AppLayout() {
         <GroupCreationProvider>
             <JoinRequestProvider>
             <UnifiedAddProvider key={session.user.id} userId={session.user.id}>
+            <VisitPhotosProvider key={session.user.id} userId={session.user.id}>
             <Stack key={session.user.id} screenOptions={{ headerShown: false }}>
                 <Stack.Screen name="(tabs)" />
             </Stack>
+            </VisitPhotosProvider>
             </UnifiedAddProvider>
             </JoinRequestProvider>
         </GroupCreationProvider>

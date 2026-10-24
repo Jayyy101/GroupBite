@@ -1,4 +1,5 @@
 import type { MapKitAddress } from "@/lib/mapkit-address";
+import type { VisitPhoto } from "@/types/visit-photos";
 
 export type Profile = {
     id: string;
@@ -279,6 +280,12 @@ export type Database = {
         };
         Views: { [_ in never]: never };
         Functions: {
+            get_visit_photos: { Args: { target_kind: string; target_entry_id: string; target_visit_id: string;
+                target_group_id: string | null; expected_membership_id: string | null }; Returns: VisitPhoto[] };
+            visit_photo_command: { Args: { operation: string; target_kind: string; target_entry_id: string; target_visit_id: string;
+                target_group_id: string | null; expected_membership_id: string | null; photo_id?: string;
+                image_width?: number; image_height?: number; image_size?: number; thumbnail_size?: number;
+                expected_revision?: number }; Returns: { id: string; removed: boolean; revision: number }[] };
             save_visit_event_destination: { Args: AddVisitArgs & { client_event_id: string; destination_kind: "personal" | "group";
                 target_group_id: string | null; expected_membership_id: string | null; selected_latitude: number | null;
                 selected_longitude: number | null; selected_address: MapKitAddress | null }; Returns: string };

@@ -144,7 +144,8 @@ test('draft','All destinations begin unchecked, including a group entry point; d
     const f=model();f.rt.world.params={groupId:ga};const r=f.render();await r.settle();
     assert(nodes(r.output).filter(n=>n.props?.accessibilityRole==='checkbox').every(n=>!n.props.accessibilityState.checked));
     assert(button(r,'Save Visit').props.disabled);const date=nodes(r.output).find(n=>n.props?.accessibilityLabel==='Visit date');
-    assert.equal(date.props.value,f.rt.load('@/components/unified-add-form').localToday());await enter(r,'Visit date','');assert.equal(nodes(r.output).find(n=>n.props?.accessibilityLabel==='Visit date').props.value,'');r.unmount();
+    const dates=f.rt.load('@/lib/visit-date');assert.equal(date.props.accessibilityValue.text,dates.visitDateLabel(dates.localToday()));
+    await click(r,'Remove visit date');assert.equal(button(r,'Visit date').props.accessibilityValue.text,'No date');r.unmount();
 });
 test('draft','Draft and independent notes survive background while private UI and late callbacks are hidden',async()=>{
     const f=model(),r=f.render();await r.settle();await fill(r);await toggle(r,'My Places');

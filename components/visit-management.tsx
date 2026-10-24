@@ -1,4 +1,5 @@
 import { useForegroundRefresh } from "@/hooks/use-foreground-refresh";
+import { VisitDateField } from "@/components/visit-date-field";
 import { useIsFocused } from "@react-navigation/native";
 import { useLeaveGuard } from "@/hooks/use-leave-guard";
 import { isVisitDate, visitManagementErrorMessage } from "@/lib/restaurant-ui";
@@ -192,8 +193,8 @@ export function useVisitManagement(props: Props | null, { visible = true, canMut
             {!canMutate && <Text style={styles.message}>This visit is no longer available to edit. Review the saved result or cancel this review.</Text>}
             {action === "edit" && canMutate ? (
                 <>
-                    <Text style={styles.label}>Visit date (optional)</Text>
-                    <TextInput accessibilityLabel="Edit visit date" value={visitedOn} onChangeText={value => { if (editable()) setVisitedOn(value); }} maxLength={10} editable={canMutate && !busy && !uncertain} placeholder="YYYY-MM-DD" placeholderTextColor="#79665E" autoCorrect={false} style={styles.input} />
+                    <VisitDateField accessibilityLabel="Edit visit date" value={visitedOn || null} disabled={!canMutate || busy || uncertain}
+                        onChange={value => { if (editable()) setVisitedOn(value ?? ""); }} />
                     <Text style={styles.label}>Rating (optional, 1–5)</Text>
                     <View style={formStyles.row}>
                         {[1, 2, 3, 4, 5].map(value => (
